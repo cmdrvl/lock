@@ -67,7 +67,7 @@ vacuum /data/dec/ | hash | fingerprint --fp csv.v0 \
   | lock --dataset-id "dec" > dec.lock.json && pack seal dec.lock.json --output evidence/dec/
 ```
 
-Both tools share:
+All spine pipeline tools share:
 
 - The same `_skipped` / `_warnings` protocol (evidence-grade pipeline degradation)
 - The same `tool_versions` accumulation pattern (versions travel with data)
@@ -98,14 +98,14 @@ lock witness <query|last|count> [OPTIONS]
 
 - `[INPUT]`: JSONL manifest file (default: stdin)
 
-### Flags (v0.1 — core)
+### Flags
 
 - `--dataset-id <ID>`: logical dataset identifier. Recorded in the lockfile. Optional — null if not provided.
 - `--as-of <TIMESTAMP>`: point-in-time for this lock (ISO 8601). Recorded, not interpreted. Optional — null if not provided.
 - `--note <TEXT>`: free-text annotation. Recorded, not interpreted. Optional — null if not provided.
 - `--no-witness`: suppress witness ledger recording for this run.
 - `--describe`: print the compiled-in `operator.json` to stdout and exit 0. Checked before input is validated, so `lock --describe` works with no arguments.
-- `--schema`: print the JSON Schema for `lock.v0` output to stdout and exit 0.
+- `--schema`: print the JSON Schema for `lock.v0` output to stdout and exit 0. Like `--describe`, checked before input is validated.
 - `--version`: print `lock <semver>` to stdout and exit 0.
 
 ### Exit codes
@@ -123,13 +123,13 @@ lock witness <query|last|count> [OPTIONS]
 
 `lock` follows the same ambient witness protocol as `rvl` and `shape`:
 
-- Default behavior: every successful lock run appends exactly one `witness.v0` record.
+- Default behavior: every lock run (success or refusal) appends exactly one `witness.v0` record.
 - Opt-out: `--no-witness`.
 - Ledger path resolution:
   1. `EPISTEMIC_WITNESS` env var, if set
   2. `~/.epistemic/witness.jsonl` otherwise
 - Witness failures never change the domain exit code. If append/query fails, print a warning to stderr and preserve domain result semantics.
-- `outcome` in the witness record: `"LOCK_CREATED"` (exit 0) or `"LOCK_PARTIAL"` (exit 1).
+- `outcome` in the witness record: `"LOCK_CREATED"` (exit 0), `"LOCK_PARTIAL"` (exit 1), or `"REFUSAL"` (exit 2).
 
 Witness query subcommands (same shape as rvl):
 
@@ -155,7 +155,7 @@ Every input record became a member. No records were skipped. The lockfile is com
 
 ### 2. LOCK_PARTIAL (exit 1)
 
-Lock created, but some input records were skipped due to upstream `_skipped: true` markers or missing required fields. The `skipped` array records exactly which records were excluded and why. The lock is valid (self-hash checks out) but does not cover the full input set.
+Lock created, but some input records were skipped due to upstream `_skipped: true` markers. The `skipped` array records exactly which records were excluded and why. The lock is valid (self-hash checks out) but does not cover the full input set. Note: non-skipped records missing required fields (e.g., `bytes_hash`) trigger a refusal (`E_MISSING_HASH`), not a partial lock.
 
 ### 3. REFUSAL (exit 2)
 
@@ -175,6 +175,7 @@ Every non-skipped input record MUST have:
 
 | Field | Required by | Notes |
 |-------|-------------|-------|
+| `version` | all stream tools | Record schema version (e.g., `hash.v0`, `fingerprint.v0`). Used for version compatibility check. |
 | `path` | `vacuum` | Absolute path to the artifact |
 | `relative_path` | `vacuum` | Path relative to scan root (used as member key) |
 | `bytes_hash` | `hash` | Content hash in `<algorithm>:<hex>` format |
@@ -205,7 +206,7 @@ Records missing `bytes_hash` (without `_skipped: true`) trigger a refusal (`E_MI
 ### Version compatibility
 
 - `lock` accepts records with `version` fields `vacuum.v0`, `hash.v0`, or `fingerprint.v0`.
-- Records from unknown future versions (e.g., `hash.v2`) cause a refusal (`E_BAD_INPUT`).
+- Records with a missing or unrecognized `version` field (e.g., `hash.v2`, or no `version` key at all) cause a refusal (`E_BAD_INPUT`).
 
 ---
 
@@ -236,6 +237,22 @@ Records missing `bytes_hash` (without `_skipped: true`) trigger a refusal (`E_MI
 ```
 
 The `next_command` field provides a literal copy/paste command for mechanical recovery. Agents use it directly; humans copy/paste.
+
+### Refusal detail schemas
+
+```
+E_EMPTY:
+  { }
+
+E_BAD_INPUT (parse error):
+  { "line": 42, "error": "expected value at line 1 column 1" }
+
+E_BAD_INPUT (unknown version):
+  { "line": 3, "version": "hash.v2" }
+
+E_MISSING_HASH:
+  { "count": 3, "sample_paths": ["data/model.xlsx", "data/tape.csv", "data/readme.pdf"] }
+```
 
 ---
 
@@ -271,11 +288,11 @@ Each entry in `members` represents one successfully processed artifact:
 
 When `fingerprint` is present:
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `fingerprint_id` | string | Which fingerprint matched |
-| `fingerprint_version` | string | Fingerprint crate version |
-| `matched` | bool | Whether the fingerprint matched |
+| Field | Type | Nullable | Notes |
+|-------|------|----------|-------|
+| `fingerprint_id` | string | no | Which fingerprint matched |
+| `fingerprint_version` | string | no | Fingerprint crate version |
+| `matched` | bool | no | Whether the fingerprint matched |
 | `content_hash` | string | yes | BLAKE3 of matched content; null if not matched |
 
 ### Skipped entry object
@@ -297,6 +314,8 @@ Warning object shape:
   "detail": {}
 }
 ```
+
+> **Note:** The examples below show keys in logical reading order for clarity. The actual canonical output has all keys sorted alphabetically at every level (e.g., `as_of` before `created` before `dataset_id` …). See **Canonical JSON serialization** for the implementation constraint.
 
 ### Full example — LOCK_CREATED (exit 0)
 
@@ -428,7 +447,33 @@ Lock determinism depends on:
 - **Sorted members** (lexicographic byte-order on `path`)
 - **Canonical JSON serialization** (sorted keys, compact)
 
-A lockfile created on macOS and one created on Windows for the same logical file set should have the same `lock_hash` when member identity is based on normalized relative paths.
+Given the same input records and the same `created` timestamp, a lockfile produced on macOS and one produced on Windows should have the same `lock_hash`. The `created` field is the only non-deterministic input — all other fields are derived from the input stream (normalized relative paths, content hashes, sorted members).
+
+---
+
+## Witness Record
+
+lock's witness record follows the standard `witness.v0` schema:
+
+```json
+{
+  "id": "blake3:...",
+  "tool": "lock",
+  "version": "0.1.0",
+  "binary_hash": "blake3:...",
+  "inputs": [
+    { "path": "stdin", "hash": null, "bytes": null }
+  ],
+  "params": { "dataset_id": "dec-delivery", "as_of": null, "note": null },
+  "outcome": "LOCK_CREATED",
+  "exit_code": 0,
+  "output_hash": "blake3:...",
+  "prev": "blake3:...",
+  "ts": "2026-02-24T10:00:00Z"
+}
+```
+
+For lock, `inputs` describes the JSONL source: `"stdin"` when piped, or the file path when a positional argument is given. `inputs[].hash` and `inputs[].bytes` are `null` because stdin cannot be pre-hashed (it is consumed during reading). When a file argument is provided, `hash` and `bytes` can be populated after reading. The `output_hash` is BLAKE3 of the final stdout output (the lockfile JSON or refusal envelope).
 
 ---
 
@@ -437,26 +482,34 @@ A lockfile created on macOS and one created on Windows for the same logical file
 ### Execution flow
 
 ```
-1. Parse CLI (clap)
-2. If --describe / --schema / --version: emit and exit 0
-3. Open input (file or stdin)
-4. For each JSONL line:
-   a. Parse JSON
-   b. If _skipped: true → collect into skipped list
-   c. If missing bytes_hash → collect for E_MISSING_HASH refusal
-   d. Otherwise → collect into members list
-   e. Merge tool_versions from record into accumulated map
-5. If no records at all → refuse E_EMPTY
-6. If any non-skipped records lack bytes_hash → refuse E_MISSING_HASH
-7. Sort members by path (lexicographic, byte-order)
-8. Sort skipped by path
-9. Build lockfile JSON with lock_hash = ""
-10. Serialize to canonical JSON
-11. SHA256 → lock_hash
-12. Re-serialize with real lock_hash
-13. Write to stdout
-14. Append witness record (unless --no-witness)
-15. Exit 0 (all members) or 1 (has skipped)
+ 1. Parse CLI (clap)           → exit 2 on bad args; --version handled here by clap
+ 2. If witness subcommand: dispatch to witness query/last/count, exit
+ 3. If --describe / --schema: emit and exit 0
+ 4. Open input (file or stdin)
+ 5. For each JSONL line:
+    a. Parse JSON → on parse failure: refuse E_BAD_INPUT immediately
+    b. Check version field → on unknown version: refuse E_BAD_INPUT
+    c. Merge tool_versions from record into accumulated map (all records, including skipped)
+    d. If _skipped: true → collect into skipped list
+    e. If missing bytes_hash (and not _skipped) → collect for E_MISSING_HASH refusal
+    f. Otherwise → collect into members list
+ 6. If no records at all → refuse E_EMPTY
+ 7. If any non-skipped records lack bytes_hash → refuse E_MISSING_HASH
+    → On refusal (steps 5a/5b/6/7): emit refusal envelope to stdout, append
+      witness record with outcome "REFUSAL" (if not --no-witness), exit 2
+ 8. Sort members by path (lexicographic, byte-order)
+ 9. Sort skipped by path
+10. Build lockfile JSON with lock_hash = ""
+11. Serialize to canonical JSON
+12. SHA256 → lock_hash
+13. Re-serialize with real lock_hash
+14. Write to stdout
+15. Append witness record (unless --no-witness); output_hash is
+    BLAKE3 of the final stdout output (per spine witness protocol).
+    Note: this is different from lock_hash (SHA256 of canonical JSON
+    with lock_hash=""). The witness hashes the final emitted bytes;
+    the self-hash covers the pre-hash canonical form.
+16. Exit 0 (all members) or 1 (has skipped)
 ```
 
 ### Core data structures
@@ -508,16 +561,55 @@ struct Warning {
     detail: serde_json::Value,
 }
 
-/// CLI arguments
-struct Cli {
-    input: Option<PathBuf>,       // JSONL file; None = stdin
-    dataset_id: Option<String>,
-    as_of: Option<String>,
-    note: Option<String>,
-    no_witness: bool,
-    describe: bool,
-    schema: bool,
-    version: bool,
+// === CLI ===
+
+#[derive(Parser)]
+pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
+    /// JSONL manifest file (default: stdin)
+    pub input: Option<PathBuf>,
+
+    /// Logical dataset identifier
+    #[arg(long)]
+    pub dataset_id: Option<String>,
+
+    /// Point-in-time for this lock (ISO 8601)
+    #[arg(long)]
+    pub as_of: Option<String>,
+
+    /// Free-text annotation
+    #[arg(long)]
+    pub note: Option<String>,
+
+    /// Suppress witness ledger recording
+    #[arg(long)]
+    pub no_witness: bool,
+
+    /// Print operator.json and exit
+    #[arg(long)]
+    pub describe: bool,
+
+    /// Print JSON Schema and exit
+    #[arg(long)]
+    pub schema: bool,
+}
+
+#[derive(Subcommand)]
+pub enum Command {
+    /// Query the witness ledger
+    Witness {
+        #[command(subcommand)]
+        action: WitnessAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum WitnessAction {
+    Query { /* filter flags */ },
+    Last,
+    Count { /* filter flags */ },
 }
 ```
 
@@ -528,7 +620,7 @@ The self-hash requires deterministic serialization. Options:
 - **serde_json with sorted keys**: Use `BTreeMap` for all map types (not `HashMap`). Serialize with `serde_json::to_string` (compact, no trailing newline). BTreeMap guarantees sorted keys.
 - **Explicit canonical form**: If needed, use a dedicated canonical JSON serializer (e.g., `json-canonicalization` crate implementing RFC 8785).
 
-For v0, `BTreeMap` + `serde_json::to_string` is sufficient. All map types in the lockfile are `BTreeMap<String, _>`, which serde serializes with sorted keys by default.
+For v0, `BTreeMap` + `serde_json::to_string` is sufficient for nested maps. However, **the top-level `Lockfile` struct must not be serialized directly** — serde serializes struct fields in declaration order, not alphabetically. To produce sorted keys at the top level, serialize via `serde_json::to_value()` first (which converts structs to `Value::Object(Map)`), then use `serde_json::to_string()` on the `Value`. `serde_json::Map` preserves insertion order, but `to_value()` from a struct with `BTreeMap` fields will produce sorted nested keys. For the top level: either (a) manually construct a `BTreeMap<String, Value>`, or (b) use the `json-canonicalization` crate (RFC 8785) which handles key sorting at all levels. Option (a) is simpler for v0.
 
 Float representation: `serde_json` uses shortest round-trip representation for f64. This matches the canonical form requirement. (In practice, lockfiles contain no floats — sizes are u64, hashes are strings.)
 
@@ -537,9 +629,10 @@ Float representation: `serde_json` uses shortest round-trip representation for f
 ```
 lock/
 ├── src/
-│   ├── main.rs          # Entry point, clap CLI
+│   ├── main.rs          # Minimal: calls lock::run(), maps to ExitCode
+│   ├── lib.rs           # pub fn run() → u8 (handles errors internally, returns exit code)
 │   ├── cli/
-│   │   └── mod.rs       # CLI argument parsing and dispatch
+│   │   └── mod.rs       # clap derive Cli / Command / WitnessAction
 │   ├── input/
 │   │   └── mod.rs       # JSONL reader, record parsing, field extraction
 │   ├── lockfile/
@@ -557,6 +650,17 @@ lock/
     └── PLAN.md          # This file
 ```
 
+### `main.rs` (≤15 lines)
+
+```rust
+#![forbid(unsafe_code)]
+
+fn main() -> std::process::ExitCode {
+    let code = lock::run();
+    std::process::ExitCode::from(code)
+}
+```
+
 ### Key dependencies
 
 | Crate | Purpose |
@@ -572,7 +676,7 @@ lock/
 `lock` reads `tool_versions` from every input record and merges them into a single map:
 
 1. Start with an empty `BTreeMap<String, String>`.
-2. For each non-skipped input record, merge its `tool_versions` into the accumulator. If the same tool appears with different versions across records (shouldn't happen in a single pipeline run), keep the first version seen.
+2. For each input record (both members and skipped), merge its `tool_versions` into the accumulator. Skipped records still carry upstream tool versions and must be included — otherwise an all-skipped input would lose upstream version information. If the same tool appears with different versions across records (shouldn't happen in a single pipeline run), keep the first version seen.
 3. Add `{ "lock": "<lock's own semver>" }` to the merged map.
 4. This becomes the lockfile's `tool_versions`.
 
@@ -660,7 +764,7 @@ The versions travel through the pipeline on every record — lock doesn't need t
 | Empty stdin | Exit 2, `E_EMPTY` refusal |
 | Pipe from `vacuum` only (no hash) | Exit 2, `E_MISSING_HASH` refusal |
 | Self-hash verification | Parse output, blank `lock_hash`, re-serialize, SHA256 matches |
-| Determinism | Same input → identical `lock_hash` across runs |
+| Determinism | Same input with fixed `created` timestamp → identical `lock_hash`. Tests must fixture `created` (e.g., via injectable clock) because the real timestamp varies per run. |
 | Cross-platform paths | Forward-slash normalization in member paths |
 
 ### Witness tests
