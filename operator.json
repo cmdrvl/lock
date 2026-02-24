@@ -1,0 +1,158 @@
+{
+  "schema_version": "operator.v0",
+  "name": "lock",
+  "version": "0.1.0",
+  "description": "Dataset lockfile tool: pins artifacts, fingerprints, and tool versions into a self-hashed immutable JSON artifact",
+  "repository": "https://github.com/cmdrvl/lock",
+  "license": "MIT",
+
+  "invocation": {
+    "binary": "lock",
+    "usage": [
+      "lock [<input>] [OPTIONS]",
+      "lock witness <query|last|count> [OPTIONS]"
+    ],
+    "output_mode": "artifact",
+    "output_schema": "lock.v0",
+    "json_flag": null
+  },
+
+  "arguments": [
+    {
+      "name": "input",
+      "type": "file_path",
+      "required": false,
+      "position": 0,
+      "description": "JSONL manifest file (default: stdin)"
+    }
+  ],
+
+  "options": [
+    {
+      "name": "dataset_id",
+      "flag": "--dataset-id",
+      "type": "string",
+      "description": "Logical dataset identifier"
+    },
+    {
+      "name": "as_of",
+      "flag": "--as-of",
+      "type": "string",
+      "description": "Point-in-time annotation (ISO 8601)"
+    },
+    {
+      "name": "note",
+      "flag": "--note",
+      "type": "string",
+      "description": "Free-text annotation"
+    },
+    {
+      "name": "no_witness",
+      "flag": "--no-witness",
+      "type": "flag",
+      "description": "Suppress witness ledger recording for this run"
+    },
+    {
+      "name": "describe",
+      "flag": "--describe",
+      "type": "flag",
+      "description": "Print compiled operator.json and exit 0"
+    },
+    {
+      "name": "schema",
+      "flag": "--schema",
+      "type": "flag",
+      "description": "Print lock.v0 JSON Schema and exit 0"
+    }
+  ],
+
+  "subcommands": [
+    {
+      "name": "witness",
+      "description": "Witness ledger query commands",
+      "status": "available",
+      "actions": [
+        {
+          "name": "query",
+          "usage": "lock witness query [--tool <name>] [--since <iso8601>] [--until <iso8601>] [--outcome <LOCK_CREATED|LOCK_PARTIAL|REFUSAL>] [--input-hash <substring>] [--limit <n>] [--json]"
+        },
+        {
+          "name": "last",
+          "usage": "lock witness last [--json]"
+        },
+        {
+          "name": "count",
+          "usage": "lock witness count [--tool <name>] [--since <iso8601>] [--until <iso8601>] [--outcome <LOCK_CREATED|LOCK_PARTIAL|REFUSAL>] [--input-hash <substring>] [--json]"
+        }
+      ],
+      "current_runtime_behavior": {
+        "success_exit_code": 0,
+        "no_match_exit_code": 1,
+        "error_exit_code": 2,
+        "ledger_path_resolution": [
+          "EPISTEMIC_WITNESS",
+          "~/.epistemic/witness.jsonl"
+        ]
+      }
+    }
+  ],
+
+  "exit_codes": {
+    "0": {
+      "meaning": "LOCK_CREATED",
+      "domain": "positive"
+    },
+    "1": {
+      "meaning": "LOCK_PARTIAL",
+      "domain": "negative"
+    },
+    "2": {
+      "meaning": "REFUSAL / CLI error / witness internal error",
+      "domain": "error"
+    }
+  },
+
+  "refusals": [
+    {
+      "code": "E_EMPTY",
+      "message": "No input records",
+      "action": "run_upstream",
+      "tool": "vacuum"
+    },
+    {
+      "code": "E_BAD_INPUT",
+      "message": "Invalid JSONL or unknown record version",
+      "action": "escalate"
+    },
+    {
+      "code": "E_MISSING_HASH",
+      "message": "Records lack bytes_hash",
+      "action": "run_upstream",
+      "tool": "hash"
+    }
+  ],
+
+  "capabilities": {
+    "formats": [
+      "jsonl"
+    ],
+    "profile_aware": false,
+    "streaming": false,
+    "witness": {
+      "ambient_recording": "enabled_by_default",
+      "query_subcommands": "available",
+      "no_witness_flag": "suppresses_recording"
+    }
+  },
+
+  "pipeline": {
+    "upstream": [
+      "vacuum",
+      "hash",
+      "fingerprint"
+    ],
+    "downstream": [
+      "pack"
+    ]
+  }
+}
