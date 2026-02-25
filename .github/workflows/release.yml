@@ -4,14 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Cargo package version to release (for example 0.1.1)
-        required: true
+        description: Cargo package version to release (optional; defaults to Cargo.toml version)
+        required: false
         type: string
       publish:
         description: Publish to crates.io after successful dry-run verification
         required: false
         type: boolean
         default: false
+  push:
+    branches: ["main"]
+    paths: ["Cargo.toml"]
 
 permissions:
   contents: write
@@ -22,6 +25,9 @@ jobs:
   preflight:
     name: Release preflight checks
     runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.version.outputs.release_version }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,20 +40,25 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Ensure requested version matches Cargo.toml
+      - name: Resolve release version
+        id: version
         shell: bash
         run: |
           set -euo pipefail
-          declared_version="$(grep -m1 '^version = "' Cargo.toml | sed 's/version = "\(.*\)"/\1/')"
-          requested_version="${{ github.event.inputs.version }}"
+          declared_version="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
+          requested_version="${{ github.event.inputs.version || '' }}"
           if [[ -z "${declared_version}" ]]; then
             echo "Unable to read package version from Cargo.toml"
             exit 1
           fi
-          if [[ "${declared_version}" != "${requested_version}" ]]; then
+          if [[ -n "${requested_version}" && "${declared_version}" != "${requested_version}" ]]; then
             echo "Version mismatch: Cargo.toml=${declared_version}, workflow input=${requested_version}"
             exit 1
           fi
+          release_version="${requested_version:-${declared_version}}"
+          echo "release_version=${release_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=v${release_version}" >> "${GITHUB_OUTPUT}"
+          echo "Using release version ${release_version}"
 
       - name: Verify Cargo.lock is synchronized
         run: cargo check --locked --all-targets
@@ -140,7 +151,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event.inputs.version }}"
+          version="${{ needs.preflight.outputs.release_version }}"
           target="${{ matrix.target }}"
           staging="lock-${version}-${target}"
           mkdir -p "${staging}"
@@ -154,7 +165,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event.inputs.version }}"
+          version="${{ needs.preflight.outputs.release_version }}"
           target="${{ matrix.target }}"
           staging="lock-${version}-${target}"
           mkdir -p "${staging}"
@@ -173,7 +184,7 @@ jobs:
 
   release:
     name: Create release with artifacts
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -214,7 +225,7 @@ jobs:
         with:
           path: .
           format: spdx-json
-          output-file: artifacts/lock-${{ github.event.inputs.version }}.sbom.spdx.json
+          output-file: artifacts/lock-${{ needs.preflight.outputs.release_version }}.sbom.spdx.json
           upload-artifact: "false"
           upload-release-assets: "false"
 
@@ -228,14 +239,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cp "${{ steps.provenance.outputs.bundle-path }}" "artifacts/lock-${{ github.event.inputs.version }}.provenance.intoto.jsonl"
+          cp "${{ steps.provenance.outputs.bundle-path }}" "artifacts/lock-${{ needs.preflight.outputs.release_version }}.provenance.intoto.jsonl"
 
       - name: Create annotated tag if missing
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event.inputs.version }}"
-          tag="v${version}"
+          version="${{ needs.preflight.outputs.release_version }}"
+          tag="${{ needs.preflight.outputs.release_tag }}"
           if git rev-parse "${tag}" >/dev/null 2>&1; then
             echo "Tag ${tag} already exists. Reusing existing tag."
           else
@@ -249,8 +260,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event.inputs.version }}"
-          tag="v${version}"
+          version="${{ needs.preflight.outputs.release_version }}"
+          tag="${{ needs.preflight.outputs.release_tag }}"
           if gh release view "${tag}" >/dev/null 2>&1; then
             echo "Release ${tag} exists. Uploading artifacts to existing release."
             gh release upload "${tag}" artifacts/* --clobber
@@ -263,7 +274,7 @@ jobs:
 
   homebrew:
     name: Update Homebrew tap
-    needs: release
+    needs: [preflight, release]
     runs-on: ubuntu-latest
     steps:
       - name: Download SHA256SUMS from release
@@ -272,8 +283,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event.inputs.version }}"
-          tag="v${version}"
+          version="${{ needs.preflight.outputs.release_version }}"
+          tag="${{ needs.preflight.outputs.release_tag }}"
           gh release download "${tag}" --pattern "SHA256SUMS" --dir .
           cat SHA256SUMS
 
@@ -281,7 +292,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event.inputs.version }}"
+          version="${{ needs.preflight.outputs.release_version }}"
           repo="${{ github.repository }}"
           base_url="https://github.com/${repo}/releases/download/v${version}"
 
@@ -339,7 +350,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ github.event.inputs.version }}"
+          version="${{ needs.preflight.outputs.release_version }}"
           tap_repo="cmdrvl/homebrew-tap"
 
           if [[ -z "${TAP_TOKEN:-}" ]]; then
@@ -366,7 +377,7 @@ jobs:
 
   publish:
     name: Publish to crates.io
-    if: ${{ github.event.inputs.publish == 'true' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish == 'true' }}
     runs-on: ubuntu-latest
     needs: preflight
     steps:
