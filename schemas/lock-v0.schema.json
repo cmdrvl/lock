@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmdrvl.com/schemas/lock.v0.json",
+  "title": "lock.v0",
+  "description": "Dataset lockfile: pins artifacts, fingerprints, and tool versions into a self-hashed immutable JSON artifact.",
+  "type": "object",
+  "required": [
+    "version",
+    "lock_hash",
+    "dataset_id",
+    "as_of",
+    "note",
+    "created",
+    "tool_versions",
+    "profiles",
+    "skipped",
+    "members",
+    "skipped_count",
+    "member_count"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "lock.v0",
+      "description": "Schema version identifier."
+    },
+    "lock_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "description": "Self-hash of the canonical lock JSON with lock_hash set to empty string."
+    },
+    "dataset_id": {
+      "type": ["string", "null"],
+      "description": "Logical dataset identifier from --dataset-id flag."
+    },
+    "as_of": {
+      "type": ["string", "null"],
+      "description": "Point-in-time annotation (ISO 8601) from --as-of flag."
+    },
+    "note": {
+      "type": ["string", "null"],
+      "description": "Free-text annotation from --note flag."
+    },
+    "created": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp when the lock was created."
+    },
+    "tool_versions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Merged map of tool name to semver for all tools that touched these records, plus lock's own version."
+    },
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Deduplicated list of profile IDs. Always empty in v0."
+    },
+    "skipped": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/skipped_entry"
+      },
+      "description": "Records excluded from members, sorted by path."
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/member"
+      },
+      "description": "Successfully locked artifacts, sorted by path (lexicographic byte-order)."
+    },
+    "skipped_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Length of the skipped array."
+    },
+    "member_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Length of the members array."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "member": {
+      "type": "object",
+      "required": ["path", "bytes_hash", "size", "fingerprint"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative path (forward-slash normalized) from upstream relative_path."
+        },
+        "bytes_hash": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+:[0-9a-f]+$",
+          "description": "Content hash in algorithm:hex format."
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "File size in bytes."
+        },
+        "fingerprint": {
+          "oneOf": [
+            { "$ref": "#/$defs/fingerprint_result" },
+            { "type": "null" }
+          ],
+          "description": "Fingerprint result from upstream, or null if fingerprint was not in the pipeline."
+        }
+      },
+      "additionalProperties": false
+    },
+    "fingerprint_result": {
+      "type": "object",
+      "required": ["fingerprint_id", "fingerprint_version", "matched"],
+      "properties": {
+        "fingerprint_id": {
+          "type": "string",
+          "description": "Which fingerprint matched."
+        },
+        "fingerprint_version": {
+          "type": "string",
+          "description": "Fingerprint crate version."
+        },
+        "matched": {
+          "type": "boolean",
+          "description": "Whether the fingerprint matched."
+        },
+        "content_hash": {
+          "type": ["string", "null"],
+          "description": "BLAKE3 hash of matched content; null if not matched."
+        }
+      },
+      "additionalProperties": false
+    },
+    "skipped_entry": {
+      "type": "object",
+      "required": ["path", "warnings"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative path (or absolute path if relative_path absent) from the input record."
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/warning"
+          },
+          "description": "Accumulated warnings from the stream pipeline."
+        }
+      },
+      "additionalProperties": false
+    },
+    "warning": {
+      "type": "object",
+      "required": ["tool", "code", "message", "detail"],
+      "properties": {
+        "tool": {
+          "type": "string",
+          "description": "Tool that generated this warning."
+        },
+        "code": {
+          "type": "string",
+          "description": "Warning code."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable warning message."
+        },
+        "detail": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Additional structured detail."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

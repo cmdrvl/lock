@@ -1,0 +1,51 @@
+{
+  "version": "lock.v0",
+  "lock_hash": "sha256:fixture-lock-hash",
+  "dataset_id": "dataset-golden",
+  "as_of": "2026-01-31T00:00:00Z",
+  "note": "fixture note",
+  "created": "2026-02-01T00:00:00Z",
+  "tool_versions": {
+    "fingerprint": "0.1.0",
+    "hash": "0.1.0",
+    "lock": "0.1.0",
+    "vacuum": "0.1.0"
+  },
+  "profiles": [],
+  "skipped": [
+    {
+      "path": "skip/me.csv",
+      "warnings": [
+        {
+          "tool": "vacuum",
+          "code": "W_SKIPPED",
+          "message": "fixture skip",
+          "detail": {
+            "reason": "fixture"
+          }
+        }
+      ]
+    }
+  ],
+  "members": [
+    {
+      "path": "a.csv",
+      "bytes_hash": "sha256:aaaaaaaa",
+      "size": 10,
+      "fingerprint": {
+        "fingerprint_id": "fp.v1",
+        "fingerprint_version": "0.3.0",
+        "matched": true,
+        "content_hash": "blake3:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "path": "b.csv",
+      "bytes_hash": "sha256:bbbbbbbb",
+      "size": 20,
+      "fingerprint": null
+    }
+  ],
+  "skipped_count": 1,
+  "member_count": 2
+}

@@ -63,6 +63,12 @@
       "flag": "--schema",
       "type": "flag",
       "description": "Print lock.v0 JSON Schema and exit 0"
+    },
+    {
+      "name": "version",
+      "flag": "--version",
+      "type": "flag",
+      "description": "Print lock <semver> and exit 0"
     }
   ],
 

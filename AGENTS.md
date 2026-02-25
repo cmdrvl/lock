@@ -144,6 +144,7 @@ cargo test
 - Self-hash verification round-trip
 - `tool_versions` merge behavior
 - Witness append/query paths
+- E2E spine compatibility (`vacuum → hash → fingerprint → lock`)
 
 ---
 

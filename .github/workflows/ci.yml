@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: "Expected crate version (e.g. 0.1.2). If omitted, uses tag version on tag runs."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Format, Lint, Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Enforce Rust formatting
+        run: cargo fmt --check
+
+      - name: Enforce clippy warnings as errors
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run test suite
+        run: cargo test
+
+  locked-build:
+    name: Locked dependency check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify lockfile is compatible with Cargo.toml
+        run: cargo check --locked --all-targets
+
+  release-guardrails:
+    name: Release guardrails
+    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve crate and expected release versions
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate_version="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
+          expected_version="${{ github.event.inputs.expected_version }}"
+          if [[ -z "${expected_version}" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            expected_version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "crate_version=${crate_version}" >> "${GITHUB_OUTPUT}"
+          echo "expected_version=${expected_version}" >> "${GITHUB_OUTPUT}"
+          echo "crate version: ${crate_version}"
+          if [[ -n "${expected_version}" ]]; then
+            echo "expected version: ${expected_version}"
+          fi
+
+      - name: Verify release version alignment
+        if: steps.versions.outputs.expected_version != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.versions.outputs.crate_version }}" != "${{ steps.versions.outputs.expected_version }}" ]]; then
+            echo "Version mismatch: Cargo.toml=${{ steps.versions.outputs.crate_version }} expected=${{ steps.versions.outputs.expected_version }}"
+            exit 1
+          fi
+
+      - name: Verify locked dependency graph
+        run: cargo check --locked --all-targets
+
+      - name: Verify publish artifact (dry run, locked)
+        run: cargo publish --dry-run --locked
