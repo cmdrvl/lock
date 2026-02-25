@@ -7,6 +7,7 @@ pub mod input;
 pub mod lockfile;
 pub mod output;
 pub mod refusal;
+pub mod verify;
 pub mod witness;
 
 pub fn run() -> u8 {
@@ -42,15 +43,28 @@ pub fn run_lock(cli: &cli::Cli) -> u8 {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "stdin".to_string());
 
+        let outcome_str = match orchestrated.outcome {
+            output::DomainOutcome::LockCreated => "LOCK_CREATED",
+            output::DomainOutcome::LockPartial => "LOCK_PARTIAL",
+            output::DomainOutcome::Refusal => "REFUSAL",
+        };
+
+        let params = serde_json::json!({
+            "dataset_id": cli.dataset_id,
+            "as_of": cli.as_of,
+            "note": cli.note,
+        });
+
+        let inputs = serde_json::json!([
+            { "path": input_path, "hash": null, "bytes": null }
+        ]);
+
         witness::append_witness_record(
-            orchestrated.outcome,
+            outcome_str,
+            orchestrated.outcome.exit_code(),
             orchestrated.payload_json.as_bytes(),
-            &witness::WitnessParams {
-                input_path,
-                dataset_id: cli.dataset_id.clone(),
-                as_of: cli.as_of.clone(),
-                note: cli.note.clone(),
-            },
+            params,
+            inputs,
         );
     }
 

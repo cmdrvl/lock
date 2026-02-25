@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::cli::WitnessFilters;
-use crate::output::DomainOutcome;
 
 #[cfg(test)]
 pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -180,37 +179,45 @@ fn parse_rfc3339_timestamp(value: &str) -> Option<DateTime<FixedOffset>> {
 // Witness append (called from orchestration after stdout output)
 // ---------------------------------------------------------------------------
 
-/// Parameters for building a witness record.
-pub struct WitnessParams {
-    /// The input source path ("stdin" or file path).
-    pub input_path: String,
-    /// CLI metadata: dataset_id.
-    pub dataset_id: Option<String>,
-    /// CLI metadata: as_of.
-    pub as_of: Option<String>,
-    /// CLI metadata: note.
-    pub note: Option<String>,
-}
-
 /// Append a witness record to the ledger after a lock run.
 ///
+/// `outcome` is the outcome string (e.g. "LOCK_CREATED", "VERIFY_OK").
+/// `exit_code` is the process exit code for this outcome.
 /// `output_bytes` is the raw bytes written to stdout (lockfile JSON or refusal envelope).
+/// `params` is the subcommand-specific parameters as a JSON value.
+/// `inputs` is the inputs array as a JSON value.
+///
 /// This function computes `output_hash` as BLAKE3 of those bytes, builds the witness
 /// record, and appends it as a single JSONL line.
 ///
 /// Witness failures are non-fatal: errors are printed to stderr but do not
 /// change the domain exit code.
-pub fn append_witness_record(outcome: DomainOutcome, output_bytes: &[u8], params: &WitnessParams) {
+pub fn append_witness_record(
+    outcome: &str,
+    exit_code: u8,
+    output_bytes: &[u8],
+    params: Value,
+    inputs: Value,
+) {
     let ledger_path = resolve_ledger_path();
-    if let Err(e) = append_witness_record_to(outcome, output_bytes, params, &ledger_path) {
+    if let Err(e) = append_witness_record_to(
+        outcome,
+        exit_code,
+        output_bytes,
+        params,
+        inputs,
+        &ledger_path,
+    ) {
         eprintln!("lock: witness append warning: {e}");
     }
 }
 
 fn append_witness_record_to(
-    outcome: DomainOutcome,
+    outcome: &str,
+    exit_code: u8,
     output_bytes: &[u8],
-    params: &WitnessParams,
+    params: Value,
+    inputs: Value,
     ledger_path: &std::path::Path,
 ) -> io::Result<()> {
     // Ensure parent directory exists.
@@ -232,24 +239,7 @@ fn append_witness_record_to(
     // Compute output_hash (BLAKE3 of stdout bytes).
     let output_hash = format!("blake3:{}", blake3::hash(output_bytes).to_hex());
 
-    // Build the witness record as a JSON value with sorted keys.
-    let outcome_str = match outcome {
-        DomainOutcome::LockCreated => "LOCK_CREATED",
-        DomainOutcome::LockPartial => "LOCK_PARTIAL",
-        DomainOutcome::Refusal => "REFUSAL",
-    };
-
     let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-
-    let params_value = serde_json::json!({
-        "dataset_id": params.dataset_id,
-        "as_of": params.as_of,
-        "note": params.note,
-    });
-
-    let inputs_value = serde_json::json!([
-        { "path": params.input_path, "hash": null, "bytes": null }
-    ]);
 
     // Build the record without id first, compute id as BLAKE3 of the record.
     let mut record = serde_json::json!({
@@ -257,10 +247,10 @@ fn append_witness_record_to(
         "tool": "lock",
         "version": env!("CARGO_PKG_VERSION"),
         "binary_hash": null,
-        "inputs": inputs_value,
-        "params": params_value,
-        "outcome": outcome_str,
-        "exit_code": outcome.exit_code(),
+        "inputs": inputs,
+        "params": params,
+        "outcome": outcome,
+        "exit_code": exit_code,
         "output_hash": output_hash,
         "prev": prev,
         "ts": ts,
@@ -751,13 +741,18 @@ not json
         assert!(matched.is_empty());
     }
 
-    fn default_params() -> WitnessParams {
-        WitnessParams {
-            input_path: "stdin".to_string(),
-            dataset_id: None,
-            as_of: None,
-            note: None,
-        }
+    fn default_params() -> Value {
+        serde_json::json!({
+            "dataset_id": null,
+            "as_of": null,
+            "note": null,
+        })
+    }
+
+    fn default_inputs() -> Value {
+        serde_json::json!([
+            { "path": "stdin", "hash": null, "bytes": null }
+        ])
     }
 
     #[test]
@@ -765,12 +760,21 @@ not json
         let dir = tempfile::tempdir().unwrap();
         let ledger_path = dir.path().join("witness.jsonl");
 
-        let params = WitnessParams {
-            dataset_id: Some("test-ds".to_string()),
-            ..default_params()
-        };
+        let params = serde_json::json!({
+            "dataset_id": "test-ds",
+            "as_of": null,
+            "note": null,
+        });
 
-        append_witness_record_to(DomainOutcome::LockCreated, b"{}", &params, &ledger_path).unwrap();
+        append_witness_record_to(
+            "LOCK_CREATED",
+            0,
+            b"{}",
+            params,
+            default_inputs(),
+            &ledger_path,
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&ledger_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
@@ -797,12 +801,24 @@ not json
         let dir = tempfile::tempdir().unwrap();
         let ledger_path = dir.path().join("witness.jsonl");
 
-        let params = default_params();
-
-        append_witness_record_to(DomainOutcome::LockCreated, b"first", &params, &ledger_path)
-            .unwrap();
-        append_witness_record_to(DomainOutcome::LockPartial, b"second", &params, &ledger_path)
-            .unwrap();
+        append_witness_record_to(
+            "LOCK_CREATED",
+            0,
+            b"first",
+            default_params(),
+            default_inputs(),
+            &ledger_path,
+        )
+        .unwrap();
+        append_witness_record_to(
+            "LOCK_PARTIAL",
+            1,
+            b"second",
+            default_params(),
+            default_inputs(),
+            &ledger_path,
+        )
+        .unwrap();
 
         let content = std::fs::read_to_string(&ledger_path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
@@ -830,9 +846,11 @@ not json
         .unwrap();
 
         append_witness_record_to(
-            DomainOutcome::LockPartial,
+            "LOCK_PARTIAL",
+            1,
             b"second",
-            &default_params(),
+            default_params(),
+            default_inputs(),
             &ledger_path,
         )
         .unwrap();
@@ -852,16 +870,21 @@ not json
         let dir = tempfile::tempdir().unwrap();
         let ledger_path = dir.path().join("witness.jsonl");
 
-        let params = WitnessParams {
-            input_path: "input.jsonl".to_string(),
-            note: Some("refused".to_string()),
-            ..default_params()
-        };
+        let params = serde_json::json!({
+            "dataset_id": null,
+            "as_of": null,
+            "note": "refused",
+        });
+        let inputs = serde_json::json!([
+            { "path": "input.jsonl", "hash": null, "bytes": null }
+        ]);
 
         append_witness_record_to(
-            DomainOutcome::Refusal,
+            "REFUSAL",
+            2,
             b"refusal envelope",
-            &params,
+            params,
+            inputs,
             &ledger_path,
         )
         .unwrap();
@@ -883,9 +906,11 @@ not json
         let expected_hash = format!("blake3:{}", blake3::hash(output).to_hex());
 
         append_witness_record_to(
-            DomainOutcome::LockCreated,
+            "LOCK_CREATED",
+            0,
             output,
-            &default_params(),
+            default_params(),
+            default_inputs(),
             &ledger_path,
         )
         .unwrap();
@@ -898,12 +923,48 @@ not json
     #[test]
     fn append_to_invalid_path_returns_error() {
         let result = append_witness_record_to(
-            DomainOutcome::LockCreated,
+            "LOCK_CREATED",
+            0,
             b"{}",
-            &default_params(),
+            default_params(),
+            default_inputs(),
             std::path::Path::new("/dev/null/impossible/witness.jsonl"),
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn append_verify_params_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger_path = dir.path().join("witness.jsonl");
+
+        let params = serde_json::json!({
+            "subcommand": "verify",
+            "root": "/data/dec",
+            "strict": true,
+        });
+        let inputs = serde_json::json!([
+            { "path": "dec.lock.json", "hash": null, "bytes": null }
+        ]);
+
+        append_witness_record_to(
+            "VERIFY_OK",
+            0,
+            b"verify output",
+            params,
+            inputs,
+            &ledger_path,
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&ledger_path).unwrap();
+        let record: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(record["outcome"], "VERIFY_OK");
+        assert_eq!(record["exit_code"], 0);
+        assert_eq!(record["params"]["subcommand"], "verify");
+        assert_eq!(record["params"]["root"], "/data/dec");
+        assert_eq!(record["params"]["strict"], true);
+        assert_eq!(record["inputs"][0]["path"], "dec.lock.json");
     }
 
     /// RAII guard for environment variable manipulation in tests.

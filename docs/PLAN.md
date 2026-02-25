@@ -1209,12 +1209,11 @@ E_UNKNOWN_ALGORITHM:
     e. No member path may be absolute → if found: refuse E_BAD_LOCKFILE
     f. No member path may contain ".." → if found: refuse E_BAD_LOCKFILE
     g. Each member bytes_hash algorithm prefix must be recognized (sha256, blake3) → if not: refuse E_UNKNOWN_ALGORITHM
- 6. Extract stored lock_hash
- 7. Set lock_hash to "" and serialize to canonical JSON (same algorithm as lock creation)
- 8. Compute SHA256 of canonical bytes
- 9. Compare "sha256:<hex>" with stored lock_hash → record valid/invalid
-10. If self-hash invalid: set outcome to VERIFY_FAILED, members to null, skip to step 14
-11. If --root provided:
+ 6. Call lockfile::self_hash::verify_lock_hash_from_json() with the raw JSON string
+    (this extracts stored lock_hash, blanks it, re-serializes canonically, SHA256s, compares)
+ 7. Record stored hash, computed hash, and valid/invalid
+ 8. If self-hash invalid: set outcome to VERIFY_FAILED, members to null, skip to step 12
+ 9. If --root provided:
     a. Verify root exists and is a directory → if not: refuse E_ROOT_NOT_FOUND, exit 2
     b. For each member:
        i.   Resolve path: <root>/<member.path>
@@ -1228,11 +1227,11 @@ E_UNKNOWN_ALGORITHM:
        - All verified → VERIFY_OK
        - Any failed → VERIFY_FAILED
        - No failed but some skipped → VERIFY_PARTIAL (or VERIFY_FAILED if --strict)
-12. If --root not provided: set members to null, outcome is VERIFY_OK (self-hash passed)
-13. Build output (VerifyResult)
-14. Emit output to stdout (JSON or human-readable)
-15. Append witness record (unless --no-witness)
-16. Exit with appropriate code
+10. If --root not provided: set members to null, outcome is VERIFY_OK (self-hash passed)
+11. Build output (VerifyResult)
+12. Emit output to stdout (JSON or human-readable)
+13. Append witness record (unless --no-witness)
+14. Exit with appropriate code
 ```
 
 ---
@@ -1398,17 +1397,45 @@ lock/
 ├── src/
 │   ├── ...
 │   ├── verify/
-│   │   ├── mod.rs          # pub fn run_verify(args: VerifyArgs) → u8
-│   │   ├── self_hash.rs    # Re-export or call lockfile::self_hash canonical serialization
-│   │   └── members.rs      # Member-by-member filesystem verification
+│   │   ├── mod.rs          # pub fn run_verify(args: VerifyArgs) → u8, orchestration
+│   │   ├── members.rs      # Member-by-member filesystem verification
+│   │   └── output.rs       # Human-readable and JSON output formatting
 │   ...
 ```
 
-`verify/self_hash.rs` must reuse the exact canonical serialization from `lockfile/self_hash.rs`. The serialization algorithm is shared — verify does not implement its own. Either:
-- (a) Extract canonical serialization into a shared module used by both `lockfile/self_hash.rs` and `verify/self_hash.rs`, or
-- (b) `verify/self_hash.rs` calls `lockfile::self_hash::canonical_serialize()` directly.
+No `verify/self_hash.rs` — the existing `lockfile::self_hash` module already provides everything verify needs:
 
-Option (b) is simpler for v0.
+- `verify_lock_hash_from_json(json: &str) → Result<bool>` — performs the full Level 1 check (parse JSON, blank `lock_hash`, re-serialize canonically, SHA256, compare). Call this directly.
+- `verify_lock_hash(lockfile: &Lockfile) → bool` — same check on a parsed `Lockfile` struct.
+- `to_canonical_json(value: &T) → Result<String>` — canonical serialization, already `pub`.
+
+Level 1 verification is effectively a one-line call to `verify_lock_hash_from_json()`. The verify module only needs to add: lockfile validation/refusal logic, member filesystem verification, and dual-mode output rendering.
+
+### Integration with existing code
+
+#### CLI routing
+
+Add `Verify(VerifyArgs)` to the existing `Command` enum in `src/cli/mod.rs`. Dispatch in `cli::run()` before witness subcommands. The existing positional `input: Option<PathBuf>` on `Cli` is unaffected — clap resolves subcommand names before falling back to positional arguments (confirmed by existing test: `"frobnicate"` → `input: Some("frobnicate")`).
+
+#### Outcome type
+
+Verify uses its own outcome type, not the existing `output::DomainOutcome` (which only has `LockCreated`/`LockPartial`/`Refusal`). The verify output shape (`lock-verify.v0`) is fundamentally different from the lockfile output shape (`lock.v0`) — it's a report, not an artifact. Verify handles its own exit code mapping.
+
+#### Refusal codes
+
+Verify defines its own `VerifyRefusalCode` enum (`E_IO`, `E_BAD_LOCKFILE`, `E_UNSUPPORTED_VERSION`, `E_ROOT_NOT_FOUND`, `E_UNKNOWN_ALGORITHM`), separate from the existing `refusal::RefusalCode` (which has `Empty`, `BadInput`, `MissingHash`). The refusal envelope shape (`version` + `outcome` + `refusal`) and the `sort_value()` utility from `src/refusal/mod.rs` are reused.
+
+#### Witness recording
+
+The current `witness::WitnessParams` struct has lock-creation-specific fields (`dataset_id`, `as_of`, `note`). Verify needs different params (`subcommand: "verify"`, `root`, `strict`). Rather than extending the existing struct, generalize `append_witness_record` to accept a `serde_json::Value` for the `params` field. Both lock creation and verify construct their params as JSON values before calling the shared append function.
+
+#### Output mode
+
+Lock is an artifact tool (always JSON, no `--json` flag). Verify is a report tool (human-readable by default, `--json` for structured). The `src/verify/output.rs` module implements both modes. This is new capability — no existing output rendering pattern in the codebase handles human-readable mode.
+
+#### `#![deny(unsafe_code)]` vs `#![forbid(unsafe_code)]`
+
+`lib.rs` uses `deny` (not `forbid`) because test code needs `unsafe` for `env::set_var` in Rust 2024 edition. `main.rs` uses `forbid`. Verify follows the same pattern — `deny` in library code, `forbid` remains in `main.rs`.
 
 ---
 

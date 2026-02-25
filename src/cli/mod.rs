@@ -40,11 +40,36 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Verify lockfile integrity and optionally member content
+    Verify(VerifyArgs),
     /// Query the witness ledger
     Witness {
         #[command(subcommand)]
         action: WitnessAction,
     },
+}
+
+/// Arguments for the `lock verify` subcommand.
+#[derive(Debug, clap::Args)]
+pub struct VerifyArgs {
+    /// Path to the lockfile to verify
+    pub lockfile: std::path::PathBuf,
+
+    /// Root directory for member verification (enables Level 2)
+    #[arg(long)]
+    pub root: Option<std::path::PathBuf>,
+
+    /// Emit structured JSON output instead of human-readable
+    #[arg(long)]
+    pub json: bool,
+
+    /// Suppress witness ledger recording for this run
+    #[arg(long)]
+    pub no_witness: bool,
+
+    /// Promote VERIFY_PARTIAL to VERIFY_FAILED
+    #[arg(long)]
+    pub strict: bool,
 }
 
 /// Witness query filter flags shared by `query` and `count` subcommands.
@@ -114,9 +139,11 @@ pub enum WitnessAction {
 pub fn run() -> u8 {
     let cli = Cli::parse();
 
-    // Witness subcommands dispatch first (before input validation).
-    if let Some(Command::Witness { action }) = &cli.command {
-        return dispatch_witness(action);
+    // Subcommands dispatch first (before input validation).
+    match &cli.command {
+        Some(Command::Verify(args)) => return dispatch_verify(args),
+        Some(Command::Witness { action }) => return dispatch_witness(action),
+        None => {}
     }
 
     // --describe and --schema are checked before input is opened.
@@ -129,6 +156,11 @@ pub fn run() -> u8 {
 
     // Main lock flow — delegates to orchestration (bd-1ab).
     dispatch_lock(&cli)
+}
+
+/// Dispatch verify subcommand to the verify module.
+fn dispatch_verify(args: &VerifyArgs) -> u8 {
+    crate::verify::run_verify(args)
 }
 
 /// Dispatch witness subcommands to the witness module.
@@ -324,6 +356,58 @@ mod tests {
     }
 
     #[test]
+    fn parse_verify_lockfile_only() {
+        let cli = Cli::try_parse_from(["lock", "verify", "dec.lock.json"]).unwrap();
+        match &cli.command {
+            Some(Command::Verify(args)) => {
+                assert_eq!(args.lockfile, PathBuf::from("dec.lock.json"));
+                assert!(args.root.is_none());
+                assert!(!args.json);
+                assert!(!args.no_witness);
+                assert!(!args.strict);
+            }
+            other => panic!("expected Verify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_verify_all_flags() {
+        let cli = Cli::try_parse_from([
+            "lock",
+            "verify",
+            "dec.lock.json",
+            "--root",
+            "/data/dec",
+            "--json",
+            "--no-witness",
+            "--strict",
+        ])
+        .unwrap();
+        match &cli.command {
+            Some(Command::Verify(args)) => {
+                assert_eq!(args.lockfile, PathBuf::from("dec.lock.json"));
+                assert_eq!(args.root, Some(PathBuf::from("/data/dec")));
+                assert!(args.json);
+                assert!(args.no_witness);
+                assert!(args.strict);
+            }
+            other => panic!("expected Verify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_verify_missing_lockfile_arg() {
+        let result = Cli::try_parse_from(["lock", "verify"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_verify_unknown_flag_rejected() {
+        let result = Cli::try_parse_from(["lock", "verify", "dec.lock.json", "--bogus"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn reject_unknown_flag() {
         let result = Cli::try_parse_from(["lock", "--bogus"]);
         assert!(result.is_err());
@@ -335,7 +419,7 @@ mod tests {
             serde_json::from_str(OPERATOR_JSON).expect("operator.json must be valid JSON");
         assert_eq!(parsed["name"], "lock");
         assert_eq!(parsed["schema_version"], "operator.v0");
-        assert_eq!(parsed["version"], "0.1.0");
+        assert_eq!(parsed["version"], "0.2.0");
     }
 
     #[test]

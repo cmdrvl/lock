@@ -1,7 +1,7 @@
 {
   "schema_version": "operator.v0",
   "name": "lock",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dataset lockfile tool: pins artifacts, fingerprints, and tool versions into a self-hashed immutable JSON artifact",
   "repository": "https://github.com/cmdrvl/lock",
   "license": "MIT",
@@ -10,6 +10,7 @@
     "binary": "lock",
     "usage": [
       "lock [<input>] [OPTIONS]",
+      "lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]",
       "lock witness <query|last|count> [OPTIONS]"
     ],
     "output_mode": "artifact",

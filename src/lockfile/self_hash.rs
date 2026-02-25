@@ -32,15 +32,26 @@ pub fn verify_lock_hash(lockfile: &Lockfile) -> bool {
     lockfile.lock_hash == expected
 }
 
-/// Verify the `lock_hash` of a lockfile from raw JSON bytes.
+/// Detail result from lock hash verification, exposing stored/computed/valid.
+pub struct LockHashDetail {
+    /// The `lock_hash` value stored in the lockfile.
+    pub stored: String,
+    /// The freshly computed `lock_hash`.
+    pub computed: String,
+    /// Whether the stored hash matches the computed hash.
+    pub valid: bool,
+}
+
+/// Verify the `lock_hash` of a lockfile from raw JSON bytes, returning full detail.
 ///
 /// Parses the JSON, blanks `lock_hash`, re-serializes canonically, SHA256s,
-/// and compares to the stored value.
-pub fn verify_lock_hash_from_json(json: &str) -> Result<bool, serde_json::Error> {
+/// and compares to the stored value. Returns the stored hash, computed hash,
+/// and whether they match.
+pub fn verify_lock_hash_detail(json: &str) -> Result<LockHashDetail, serde_json::Error> {
     let mut value: Value = serde_json::from_str(json)?;
 
     // Extract stored lock_hash.
-    let stored_hash = value
+    let stored = value
         .get("lock_hash")
         .and_then(Value::as_str)
         .unwrap_or("")
@@ -55,7 +66,20 @@ pub fn verify_lock_hash_from_json(json: &str) -> Result<bool, serde_json::Error>
     let digest = Sha256::digest(canonical.as_bytes());
     let computed = format!("sha256:{:x}", digest);
 
-    Ok(stored_hash == computed)
+    let valid = stored == computed;
+    Ok(LockHashDetail {
+        stored,
+        computed,
+        valid,
+    })
+}
+
+/// Verify the `lock_hash` of a lockfile from raw JSON bytes.
+///
+/// Convenience wrapper around [`verify_lock_hash_detail`] that returns only
+/// the boolean result.
+pub fn verify_lock_hash_from_json(json: &str) -> Result<bool, serde_json::Error> {
+    verify_lock_hash_detail(json).map(|detail| detail.valid)
 }
 
 /// Serialize a value to canonical JSON (sorted keys at all levels, compact, no trailing newline).

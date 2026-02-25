@@ -76,7 +76,7 @@ impl RefusalEnvelope {
 }
 
 /// Recursively sort all object keys in a JSON value.
-fn sort_value(v: Value) -> Value {
+pub fn sort_value(v: Value) -> Value {
     match v {
         Value::Object(map) => {
             let sorted: serde_json::Map<String, Value> =

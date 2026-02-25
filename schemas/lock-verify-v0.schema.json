@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cmdrvl.com/schemas/lock-verify.v0.json",
+  "title": "lock-verify.v0",
+  "description": "Output schema for lock verify: lockfile integrity and member content verification results.",
+  "type": "object",
+  "required": [
+    "version",
+    "outcome",
+    "lockfile",
+    "lock_hash",
+    "members",
+    "tool_versions"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "lock-verify.v0",
+      "description": "Schema version identifier."
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["VERIFY_OK", "VERIFY_FAILED", "VERIFY_PARTIAL"],
+      "description": "Verification outcome."
+    },
+    "lockfile": {
+      "type": "string",
+      "description": "Path to the lockfile that was verified."
+    },
+    "lock_hash": {
+      "$ref": "#/$defs/lock_hash_result",
+      "description": "Self-hash verification detail."
+    },
+    "members": {
+      "oneOf": [
+        { "$ref": "#/$defs/members_result" },
+        { "type": "null" }
+      ],
+      "description": "Member verification results. Null when --root not provided or when self-hash fails."
+    },
+    "tool_versions": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Tool versions used for this verification run."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "lock_hash_result": {
+      "type": "object",
+      "required": ["stored", "computed", "valid"],
+      "properties": {
+        "stored": {
+          "type": "string",
+          "description": "The lock_hash value stored in the lockfile."
+        },
+        "computed": {
+          "type": "string",
+          "description": "The freshly computed lock_hash."
+        },
+        "valid": {
+          "type": "boolean",
+          "description": "Whether stored matches computed."
+        }
+      },
+      "additionalProperties": false
+    },
+    "members_result": {
+      "type": "object",
+      "required": ["root", "checked", "verified", "failed", "skipped", "failures", "skips"],
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "Root directory used for member resolution."
+        },
+        "checked": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of members checked."
+        },
+        "verified": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Members whose content matched."
+        },
+        "failed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Members that failed verification."
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Members skipped due to I/O errors."
+        },
+        "failures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/member_failure" },
+          "description": "Details for each failed member."
+        },
+        "skips": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/member_skip" },
+          "description": "Details for each skipped member."
+        }
+      },
+      "additionalProperties": false
+    },
+    "member_failure": {
+      "type": "object",
+      "required": ["path", "reason"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative member path from the lockfile."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["MISSING", "SIZE_MISMATCH", "HASH_MISMATCH"],
+          "description": "Why the member failed."
+        },
+        "expected": {
+          "type": ["string", "null"],
+          "description": "Expected bytes_hash from lockfile."
+        },
+        "actual": {
+          "type": ["string", "null"],
+          "description": "Actual bytes_hash computed from disk. Null if file missing."
+        },
+        "expected_size": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Expected file size from lockfile."
+        },
+        "actual_size": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Actual file size on disk. Null if file missing."
+        }
+      },
+      "additionalProperties": false
+    },
+    "member_skip": {
+      "type": "object",
+      "required": ["path", "reason", "detail"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "Relative member path from the lockfile."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Category of the skip (e.g., IO_ERROR)."
+        },
+        "detail": {
+          "type": "string",
+          "description": "Human-readable detail about the skip."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -104,9 +104,9 @@ Ambient witness semantics must match spine conventions (`shape`/`rvl` parity):
 - `--no-witness` opt-out
 - Witness failures do not mutate domain outcome semantics
 
-### 7. Verify shares canonical serialization
+### 7. Verify reuses existing self-hash functions
 
-`lock verify` must reuse the exact canonical serialization from `lockfile/self_hash.rs`. Verify does not implement its own serialization — a divergence would produce false tamper detection. Call `lockfile::self_hash::canonical_serialize()` directly or extract into a shared module.
+`lock verify` Level 1 calls `lockfile::self_hash::verify_lock_hash_from_json()` — the function already exists and performs the full self-hash check. Verify does not implement its own serialization or hashing. A divergence would produce false tamper detection. No `verify/self_hash.rs` file needed.
 
 ---
 
