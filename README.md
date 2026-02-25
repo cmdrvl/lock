@@ -440,6 +440,159 @@ lock witness count [--tool <name>] [--since <iso8601>] [--until <iso8601>] \
 
 ---
 
+## Verify
+
+`lock verify` checks whether a lockfile is untampered and whether the files it describes still match what's on disk.
+
+### Quick Examples
+
+```bash
+# Level 1: Is this lockfile untampered?
+$ lock verify dec.lock.json
+✓ dec.lock.json — self-hash valid (sha256:a1b2c3d4...)
+
+# Level 2: Do the files on disk still match?
+$ lock verify dec.lock.json --root /data/dec
+✓ dec.lock.json — self-hash valid, 5/5 members verified
+  root: /data/dec
+
+# JSON output for CI/agents
+$ lock verify dec.lock.json --root /data/dec --json
+```
+
+### What Gets Checked
+
+| Level | Flag | Checks |
+|-------|------|--------|
+| **1** | (default) | Re-derives `lock_hash` using canonical serialization. No filesystem access. |
+| **2** | `--root <DIR>` | Level 1 + resolves each member path, checks file existence, size, and content hash. |
+
+If the self-hash fails, member verification is skipped — the lockfile data is untrustworthy.
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | `VERIFY_OK` — self-hash valid, members verified (or no `--root`) |
+| `1` | `VERIFY_FAILED` — tampered or members drifted; or `VERIFY_PARTIAL` — some members unreadable |
+| `2` | `REFUSAL` — lockfile unreadable, malformed, or root not found |
+
+### Output Examples
+
+#### VERIFY_OK
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "VERIFY_OK",
+  "lockfile": "dec.lock.json",
+  "lock_hash": {
+    "stored": "sha256:a1b2c3d4e5f6...",
+    "computed": "sha256:a1b2c3d4e5f6...",
+    "valid": true
+  },
+  "members": {
+    "root": "/data/dec",
+    "checked": 5,
+    "verified": 5,
+    "failed": 0,
+    "skipped": 0,
+    "failures": [],
+    "skips": []
+  },
+  "tool_versions": { "lock": "0.1.0" }
+}
+```
+
+#### VERIFY_FAILED (member drift)
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "VERIFY_FAILED",
+  "lockfile": "dec.lock.json",
+  "lock_hash": { "stored": "sha256:a1b2...", "computed": "sha256:a1b2...", "valid": true },
+  "members": {
+    "root": "/data/dec",
+    "checked": 3,
+    "verified": 1,
+    "failed": 2,
+    "skipped": 0,
+    "failures": [
+      { "path": "tape.csv", "reason": "HASH_MISMATCH", "expected": "sha256:7d86...", "actual": "sha256:a3f1...", "expected_size": 847201, "actual_size": 851003 },
+      { "path": "draft.xlsx", "reason": "MISSING", "expected": "sha256:9d2e...", "actual": null, "expected_size": 12048, "actual_size": null }
+    ],
+    "skips": []
+  },
+  "tool_versions": { "lock": "0.1.0" }
+}
+```
+
+#### TAMPERED (self-hash mismatch)
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "VERIFY_FAILED",
+  "lockfile": "dec.lock.json",
+  "lock_hash": {
+    "stored": "sha256:a1b2c3d4...",
+    "computed": "sha256:ff001122...",
+    "valid": false
+  },
+  "members": null,
+  "tool_versions": { "lock": "0.1.0" }
+}
+```
+
+When `lock_hash.valid` is `false`, `members` is always `null` — member data from a tampered lockfile cannot be trusted.
+
+### CLI Reference
+
+```bash
+lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--root <DIR>` | Enable member verification against this directory |
+| `--json` | Structured JSON output (default is human-readable) |
+| `--strict` | Promote `VERIFY_PARTIAL` → `VERIFY_FAILED` |
+| `--no-witness` | Suppress witness ledger recording |
+
+### Pipeline Integration
+
+#### CI gate
+
+```bash
+# Verify before downstream processing
+lock verify dec.lock.json --root /data/dec --strict --json
+if [ $? -ne 0 ]; then
+  echo "Lockfile verification failed"
+  exit 1
+fi
+```
+
+#### Audit workflow
+
+```bash
+# Received a lockfile from a vendor — is it intact?
+lock verify vendor-delivery.lock.json
+
+# Re-verify against the data directory
+lock verify vendor-delivery.lock.json --root /mnt/vendor/2026-q1
+```
+
+#### SLA enforcement
+
+```bash
+# Nightly check: does the locked dataset still exist?
+lock verify production.lock.json --root /data/production --strict --json \
+  | jq -e '.outcome == "VERIFY_OK"' || alert "Production data drift detected"
+```
+
+---
+
 ## Limitations
 
 | Limitation | Detail |
@@ -475,6 +628,24 @@ No.
 ### Can I add metadata after the fact?
 
 No. Any modification breaks `lock_hash`. If you need to annotate, regenerate the lockfile with `--note` or `--as-of`.
+
+### How do I verify a lockfile?
+
+```bash
+# Self-hash only (was it tampered?)
+lock verify dec.lock.json
+
+# Self-hash + member content (do files still match?)
+lock verify dec.lock.json --root /data/dec
+```
+
+Level 1 needs no filesystem access — it re-derives the self-hash. Level 2 additionally checks each member file on disk.
+
+### What's the difference between `lock verify` and `pack verify`?
+
+`lock verify` checks a lockfile's self-hash and optionally its members against the filesystem. It answers: *is this lockfile valid, and do the files it describes still match?*
+
+`pack verify` (future) will check an evidence pack's integrity — including the lockfile bundled inside, plus the pack's own manifest and signatures. Lock verify is for the data layer; pack verify is for the evidence layer.
 
 ### How does lock relate to pack?
 

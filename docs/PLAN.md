@@ -806,3 +806,666 @@ The versions travel through the pipeline on every record — lock doesn't need t
 ### Open questions
 
 None. Lock is the simplest artifact tool in the spine — its design is fully determined by the stream protocol and self-hash convention.
+
+---
+
+## `lock verify` — Lockfile Verification
+
+### One-line promise
+
+**Verify that a lockfile is untampered and that the artifacts it describes still exist on disk.**
+
+`lock verify` closes the evidence loop: lockfiles created by `lock` become testable guarantees, not inert snapshots.
+
+---
+
+### Two verification levels
+
+#### Level 1: Self-hash only (is the lockfile untampered?)
+
+```bash
+lock verify dec.lock.json
+```
+
+Re-derives `lock_hash` using the canonical serialization algorithm (see [Self-hash](#self-hash)). No filesystem access required. If the computed hash matches the stored `lock_hash`, the lockfile has not been modified since creation.
+
+#### Level 2: Self-hash + member verification (do files on disk still match?)
+
+```bash
+lock verify dec.lock.json --root /data/dec
+```
+
+After passing Level 1, resolves each member's `path` against the `--root` directory and verifies:
+
+1. **Existence** — the file exists at `<root>/<member.path>`
+2. **Size** — `stat` size matches `member.size`
+3. **Content hash** — re-reads the file and computes the hash using the algorithm prefix from the stored `bytes_hash` (e.g., `sha256:` → SHA256, `blake3:` → BLAKE3). Compares with the stored value.
+
+If the self-hash fails (Level 1), member verification is skipped entirely — the lockfile data is untrustworthy.
+
+---
+
+### CLI
+
+```bash
+lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]
+```
+
+#### Arguments
+
+- `<LOCKFILE>`: path to the lockfile to verify (required, positional)
+
+#### Flags
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--root <DIR>` | path | — | Root directory for member verification. Without this, only self-hash is checked. |
+| `--json` | flag | `false` | Emit structured JSON output. Default is human-readable. |
+| `--no-witness` | flag | `false` | Suppress witness ledger recording for this run. |
+| `--strict` | flag | `false` | Promote `VERIFY_PARTIAL` to `VERIFY_FAILED` (exit 1). |
+
+---
+
+### Exit codes
+
+| Code | Outcome | Condition |
+|------|---------|-----------|
+| `0` | `VERIFY_OK` | Self-hash valid AND (no `--root`, or all members verified) |
+| `1` | `VERIFY_FAILED` | Self-hash invalid, or one or more members drifted/missing |
+| `1` | `VERIFY_PARTIAL` | All checked members pass, but some couldn't be read (I/O errors). Only without `--strict`. |
+| `2` | `REFUSAL` | Lockfile unreadable/malformed, root not found, unsupported version |
+
+Note: `VERIFY_PARTIAL` and `VERIFY_FAILED` share exit code `1`. The `outcome` field in JSON output distinguishes them. `--strict` collapses `VERIFY_PARTIAL` into `VERIFY_FAILED`.
+
+---
+
+### Outcomes (exactly four)
+
+#### 1. VERIFY_OK (exit 0)
+
+Self-hash is valid. If `--root` was provided, all members exist on disk with matching size and content hash.
+
+#### 2. VERIFY_FAILED (exit 1)
+
+Either:
+- Self-hash does not match (lockfile tampered), OR
+- One or more members have drifted (hash mismatch, size mismatch) or are missing
+
+When self-hash fails, `members` in the output is `null` — member data is untrustworthy, so verification is not attempted.
+
+#### 3. VERIFY_PARTIAL (exit 1)
+
+All members that could be read passed verification, but one or more members could not be read due to I/O errors (permission denied, locked file, etc.). The lockfile is not proven wrong, but not fully proven right either. With `--strict`, this becomes `VERIFY_FAILED`.
+
+#### 4. REFUSAL (exit 2)
+
+Verification was not attempted. The lockfile could not be read, parsed, or is structurally invalid.
+
+---
+
+### Streams
+
+- `stdout`: verification result — human-readable (default) or JSON (`--json`). Refusal JSON envelope for exit 2.
+- `stderr`: process-level diagnostics only.
+
+---
+
+### Output schema (JSON mode)
+
+#### VERIFY_OK — self-hash only (no `--root`)
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "VERIFY_OK",
+  "lockfile": "dec.lock.json",
+  "lock_hash": {
+    "stored": "sha256:a1b2c3d4e5f6...",
+    "computed": "sha256:a1b2c3d4e5f6...",
+    "valid": true
+  },
+  "members": null,
+  "tool_versions": { "lock": "0.1.0" }
+}
+```
+
+#### VERIFY_OK — with `--root` (all members pass)
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "VERIFY_OK",
+  "lockfile": "dec.lock.json",
+  "lock_hash": {
+    "stored": "sha256:a1b2c3d4e5f6...",
+    "computed": "sha256:a1b2c3d4e5f6...",
+    "valid": true
+  },
+  "members": {
+    "root": "/data/dec",
+    "checked": 5,
+    "verified": 5,
+    "failed": 0,
+    "skipped": 0,
+    "failures": [],
+    "skips": []
+  },
+  "tool_versions": { "lock": "0.1.0" }
+}
+```
+
+#### VERIFY_FAILED — member drift
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "VERIFY_FAILED",
+  "lockfile": "dec.lock.json",
+  "lock_hash": {
+    "stored": "sha256:a1b2c3d4e5f6...",
+    "computed": "sha256:a1b2c3d4e5f6...",
+    "valid": true
+  },
+  "members": {
+    "root": "/data/dec",
+    "checked": 5,
+    "verified": 3,
+    "failed": 2,
+    "skipped": 0,
+    "failures": [
+      {
+        "path": "tape.csv",
+        "reason": "HASH_MISMATCH",
+        "expected": "sha256:7d865e95...",
+        "actual": "sha256:a3f19b02...",
+        "expected_size": 847201,
+        "actual_size": 851003
+      },
+      {
+        "path": "draft.xlsx",
+        "reason": "MISSING",
+        "expected": "sha256:9d2e4f1a...",
+        "actual": null,
+        "expected_size": 12048,
+        "actual_size": null
+      }
+    ],
+    "skips": []
+  },
+  "tool_versions": { "lock": "0.1.0" }
+}
+```
+
+#### VERIFY_FAILED — tampered lockfile (self-hash mismatch)
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "VERIFY_FAILED",
+  "lockfile": "dec.lock.json",
+  "lock_hash": {
+    "stored": "sha256:a1b2c3d4e5f6...",
+    "computed": "sha256:ff00112233...",
+    "valid": false
+  },
+  "members": null,
+  "tool_versions": { "lock": "0.1.0" }
+}
+```
+
+When `lock_hash.valid` is `false`, `members` is always `null` — member data from a tampered lockfile cannot be trusted.
+
+#### VERIFY_PARTIAL — I/O errors on some members
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "VERIFY_PARTIAL",
+  "lockfile": "dec.lock.json",
+  "lock_hash": {
+    "stored": "sha256:a1b2c3d4e5f6...",
+    "computed": "sha256:a1b2c3d4e5f6...",
+    "valid": true
+  },
+  "members": {
+    "root": "/data/dec",
+    "checked": 5,
+    "verified": 4,
+    "failed": 0,
+    "skipped": 1,
+    "failures": [],
+    "skips": [
+      {
+        "path": "archive.tar.gz",
+        "reason": "IO_ERROR",
+        "detail": "permission denied"
+      }
+    ]
+  },
+  "tool_versions": { "lock": "0.1.0" }
+}
+```
+
+#### Output field reference
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `version` | string | `"lock-verify.v0"` — always present |
+| `outcome` | string | `VERIFY_OK`, `VERIFY_FAILED`, `VERIFY_PARTIAL` |
+| `lockfile` | string | Path to the lockfile as provided on CLI |
+| `lock_hash` | object | Self-hash verification result |
+| `lock_hash.stored` | string | `lock_hash` value from the lockfile |
+| `lock_hash.computed` | string | Re-derived hash |
+| `lock_hash.valid` | bool | Whether stored matches computed |
+| `members` | object or null | `null` when no `--root` or when self-hash fails |
+| `members.root` | string | Absolute path to root directory |
+| `members.checked` | u64 | Total members in lockfile |
+| `members.verified` | u64 | Members that passed verification |
+| `members.failed` | u64 | Members with hash/size mismatch or missing |
+| `members.skipped` | u64 | Members that could not be checked (I/O) |
+| `members.failures` | array | Details of each failed member |
+| `members.skips` | array | Details of each skipped member |
+| `tool_versions` | object | `{ "lock": "<semver>" }` — lock's own version |
+
+#### Failure entry
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `path` | string | Member path from lockfile |
+| `reason` | string | `HASH_MISMATCH`, `SIZE_MISMATCH`, `MISSING` |
+| `expected` | string or null | Expected `bytes_hash` from lockfile |
+| `actual` | string or null | Computed hash from disk; `null` if missing |
+| `expected_size` | u64 or null | Expected size from lockfile |
+| `actual_size` | u64 or null | Actual size from disk; `null` if missing |
+
+`SIZE_MISMATCH` is reported when size differs but hash was not recomputed (optimization: if size differs, hash will differ too). `HASH_MISMATCH` is reported when size matches but hash differs, or when both differ (hash is authoritative). `MISSING` is reported when the file does not exist at the resolved path.
+
+#### Skip entry
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `path` | string | Member path from lockfile |
+| `reason` | string | `IO_ERROR` |
+| `detail` | string | OS-level error message |
+
+---
+
+### Human-readable output (default)
+
+When `--json` is not specified, `lock verify` emits concise human-readable output to stdout.
+
+#### VERIFY_OK (self-hash only)
+
+```
+✓ dec.lock.json — self-hash valid (sha256:a1b2c3d4...)
+```
+
+#### VERIFY_OK (with --root)
+
+```
+✓ dec.lock.json — self-hash valid, 5/5 members verified
+  root: /data/dec
+```
+
+#### VERIFY_FAILED (tampered)
+
+```
+✗ dec.lock.json — TAMPERED
+  stored:   sha256:a1b2c3d4e5f6...
+  computed: sha256:ff00112233...
+```
+
+#### VERIFY_FAILED (member drift)
+
+```
+✗ dec.lock.json — self-hash valid, 2 of 5 members failed
+  root: /data/dec
+  HASH_MISMATCH  tape.csv       expected sha256:7d86... got sha256:a3f1...
+  MISSING        draft.xlsx
+```
+
+#### VERIFY_PARTIAL
+
+```
+⚠ dec.lock.json — self-hash valid, 4/5 verified, 1 skipped
+  root: /data/dec
+  IO_ERROR  archive.tar.gz  permission denied
+```
+
+---
+
+### Refusal codes
+
+| Code | Trigger | Next step |
+|------|---------|-----------|
+| `E_IO` | Cannot read lockfile from disk | Check file path and permissions |
+| `E_BAD_LOCKFILE` | Malformed JSON, missing required fields (`lock_hash`, `members`, `version`), absolute member paths, `..` path traversal | Regenerate the lockfile |
+| `E_UNSUPPORTED_VERSION` | `version` field is not `lock.v0` | Use a compatible version of `lock` |
+| `E_ROOT_NOT_FOUND` | `--root` path does not exist or is not a directory | Check the root path |
+| `E_UNKNOWN_ALGORITHM` | Member `bytes_hash` has an unrecognized algorithm prefix (not `sha256` or `blake3`) | Regenerate the lockfile with a supported hash algorithm |
+
+#### Refusal JSON envelope
+
+```json
+{
+  "version": "lock-verify.v0",
+  "outcome": "REFUSAL",
+  "refusal": {
+    "code": "E_BAD_LOCKFILE",
+    "message": "lockfile missing required field: members",
+    "detail": {
+      "path": "dec.lock.json",
+      "missing_fields": ["members"]
+    },
+    "next_command": "vacuum /data/dec | hash | lock --dataset-id \"dec\" > dec.lock.json"
+  }
+}
+```
+
+#### Refusal detail schemas
+
+```
+E_IO:
+  { "path": "dec.lock.json", "error": "No such file or directory" }
+
+E_BAD_LOCKFILE (parse error):
+  { "path": "dec.lock.json", "error": "expected value at line 1 column 1" }
+
+E_BAD_LOCKFILE (missing fields):
+  { "path": "dec.lock.json", "missing_fields": ["members"] }
+
+E_BAD_LOCKFILE (absolute paths):
+  { "path": "dec.lock.json", "member_index": 2, "member_path": "/etc/passwd" }
+
+E_BAD_LOCKFILE (path traversal):
+  { "path": "dec.lock.json", "member_index": 1, "member_path": "../../etc/shadow" }
+
+E_UNSUPPORTED_VERSION:
+  { "path": "dec.lock.json", "version": "lock.v3" }
+
+E_ROOT_NOT_FOUND:
+  { "path": "/data/dec", "error": "No such file or directory" }
+
+E_UNKNOWN_ALGORITHM:
+  { "path": "dec.lock.json", "member_path": "tape.csv", "algorithm": "md5" }
+```
+
+---
+
+### Execution flow
+
+```
+ 1. Parse CLI (clap) → exit 2 on bad args
+ 2. If --describe / --schema / --version: handled by parent, not by verify
+ 3. Read lockfile from disk
+    → on failure: refuse E_IO, exit 2
+ 4. Parse lockfile as JSON
+    → on parse failure: refuse E_BAD_LOCKFILE, exit 2
+ 5. Validate lockfile structure:
+    a. Must have "version" field → if missing or not "lock.v0": refuse E_UNSUPPORTED_VERSION or E_BAD_LOCKFILE
+    b. Must have "lock_hash" field (string) → if missing: refuse E_BAD_LOCKFILE
+    c. Must have "members" field (array) → if missing: refuse E_BAD_LOCKFILE
+    d. Each member must have "path" (string), "bytes_hash" (string), "size" (u64)
+    e. No member path may be absolute → if found: refuse E_BAD_LOCKFILE
+    f. No member path may contain ".." → if found: refuse E_BAD_LOCKFILE
+    g. Each member bytes_hash algorithm prefix must be recognized (sha256, blake3) → if not: refuse E_UNKNOWN_ALGORITHM
+ 6. Extract stored lock_hash
+ 7. Set lock_hash to "" and serialize to canonical JSON (same algorithm as lock creation)
+ 8. Compute SHA256 of canonical bytes
+ 9. Compare "sha256:<hex>" with stored lock_hash → record valid/invalid
+10. If self-hash invalid: set outcome to VERIFY_FAILED, members to null, skip to step 14
+11. If --root provided:
+    a. Verify root exists and is a directory → if not: refuse E_ROOT_NOT_FOUND, exit 2
+    b. For each member:
+       i.   Resolve path: <root>/<member.path>
+       ii.  Check file existence → MISSING if not found
+       iii. Stat file for size → SIZE_MISMATCH if different (skip hash)
+       iv.  Read file and compute hash using algorithm from stored bytes_hash
+            → IO_ERROR if read fails (add to skips)
+       v.   Compare computed hash with stored bytes_hash → HASH_MISMATCH if different
+    c. Tally verified/failed/skipped counts
+    d. Determine outcome:
+       - All verified → VERIFY_OK
+       - Any failed → VERIFY_FAILED
+       - No failed but some skipped → VERIFY_PARTIAL (or VERIFY_FAILED if --strict)
+12. If --root not provided: set members to null, outcome is VERIFY_OK (self-hash passed)
+13. Build output (VerifyResult)
+14. Emit output to stdout (JSON or human-readable)
+15. Append witness record (unless --no-witness)
+16. Exit with appropriate code
+```
+
+---
+
+### Edge cases
+
+#### Absolute member paths
+
+Members in a lockfile should have relative paths (from `relative_path` in the pipeline). If a member `path` is absolute (starts with `/` or a Windows drive letter), `lock verify` refuses with `E_BAD_LOCKFILE`. This prevents unintended filesystem traversal.
+
+#### Path traversal (`..` components)
+
+If any member path contains `..` segments, `lock verify` refuses with `E_BAD_LOCKFILE`. Members must be confined within the root.
+
+#### Empty members array
+
+A lockfile with `members: []` and valid self-hash returns `VERIFY_OK` for Level 1. With `--root`, also `VERIFY_OK` — there's nothing to check.
+
+#### Mixed hash algorithms
+
+Different members may use different algorithms (e.g., some `sha256:`, others `blake3:`). `lock verify` uses the algorithm prefix from each member's `bytes_hash` individually. This matches how `hash` may be configured differently across pipeline runs.
+
+#### Skipped entries in lockfile
+
+The `skipped` array in the lockfile is not verified by `lock verify`. Skipped entries represent records that were excluded during lock creation — they have no `bytes_hash` to verify against.
+
+#### Lockfile with `lock_hash: ""`
+
+If `lock_hash` is an empty string, `lock verify` computes the expected hash and compares against `""`. This will always be a mismatch → `VERIFY_FAILED`.
+
+#### Symlinks
+
+Member paths that resolve to symlinks are followed. `lock verify` hashes the target file content. If the symlink is broken → `MISSING`.
+
+#### Large files
+
+`lock verify` reads files sequentially and hashes in a streaming fashion (not loading entire files into memory). No `--jobs` flag in v0 — parallel member hashing is deferred.
+
+---
+
+### Witness recording
+
+`lock verify` records witness entries with the same ambient protocol as `lock`:
+
+```json
+{
+  "id": "blake3:...",
+  "tool": "lock",
+  "version": "0.1.0",
+  "binary_hash": "blake3:...",
+  "inputs": [
+    { "path": "dec.lock.json", "hash": "blake3:...", "bytes": 4821 }
+  ],
+  "params": { "subcommand": "verify", "root": "/data/dec", "strict": false },
+  "outcome": "VERIFY_OK",
+  "exit_code": 0,
+  "output_hash": "blake3:...",
+  "prev": "blake3:...",
+  "ts": "2026-02-24T10:00:00Z"
+}
+```
+
+- `tool`: always `"lock"` (the binary name)
+- `params.subcommand`: `"verify"` — distinguishes from lock creation
+- `params.root`: the `--root` value, or `null` if not provided
+- `params.strict`: whether `--strict` was set
+- `outcome`: `VERIFY_OK`, `VERIFY_FAILED`, `VERIFY_PARTIAL`, or `REFUSAL`
+- `inputs[0]`: the lockfile path, with hash and size (lockfile can be pre-hashed since it's a file, not stdin)
+
+Witness query subcommands (`lock witness query`, `lock witness last`, `lock witness count`) return verify records alongside lock creation records. Filter with `--outcome VERIFY_OK` etc.
+
+---
+
+### Relationship to `pack verify` and `--lock` on report tools
+
+`lock verify` checks a lockfile's self-hash and optionally its members against the filesystem. It answers: **is this lockfile valid, and do the files it describes still match?**
+
+`pack verify` (deferred) will check an evidence pack's integrity — including the lockfile bundled inside it, plus the pack's own manifest and signatures.
+
+Report tools like `rvl` and `shape` may accept `--lock <lockfile>` to gate execution: refuse to run unless the lockfile verifies first. This makes lockfile verification a precondition for downstream analysis, not just a standalone check.
+
+In a CI pipeline:
+
+```bash
+# Verify lockfile integrity before downstream processing
+lock verify dec.lock.json --root /data/dec --strict
+if [ $? -ne 0 ]; then
+  echo "Lockfile verification failed — aborting pipeline"
+  exit 1
+fi
+
+# Safe to proceed with analysis
+shape dec.lock.json --lock dec.lock.json
+rvl previous.lock.json dec.lock.json
+```
+
+---
+
+### Core data structures
+
+```rust
+/// CLI arguments for verify subcommand
+struct VerifyArgs {
+    lockfile: PathBuf,                // positional: path to lockfile
+    root: Option<PathBuf>,            // --root
+    json: bool,                       // --json
+    no_witness: bool,                 // --no-witness
+    strict: bool,                     // --strict
+}
+
+/// Top-level verify result
+struct VerifyResult {
+    version: String,                  // "lock-verify.v0"
+    outcome: String,                  // VERIFY_OK, VERIFY_FAILED, VERIFY_PARTIAL
+    lockfile: String,                 // path as provided
+    lock_hash: LockHashResult,
+    members: Option<MembersResult>,   // null when no --root or self-hash failed
+    tool_versions: BTreeMap<String, String>,
+}
+
+/// Self-hash verification
+struct LockHashResult {
+    stored: String,                   // lock_hash from file
+    computed: String,                 // re-derived hash
+    valid: bool,                      // stored == computed
+}
+
+/// Member verification results
+struct MembersResult {
+    root: String,                     // absolute root path
+    checked: u64,                     // total members
+    verified: u64,                    // passed verification
+    failed: u64,                      // hash/size mismatch or missing
+    skipped: u64,                     // I/O errors
+    failures: Vec<MemberFailure>,
+    skips: Vec<MemberSkip>,
+}
+
+/// A member that failed verification
+struct MemberFailure {
+    path: String,
+    reason: String,                   // HASH_MISMATCH, SIZE_MISMATCH, MISSING
+    expected: Option<String>,         // expected bytes_hash
+    actual: Option<String>,           // actual computed hash
+    expected_size: Option<u64>,
+    actual_size: Option<u64>,
+}
+
+/// A member that could not be checked
+struct MemberSkip {
+    path: String,
+    reason: String,                   // IO_ERROR
+    detail: String,                   // OS error message
+}
+```
+
+---
+
+### Module structure addition
+
+```
+lock/
+├── src/
+│   ├── ...
+│   ├── verify/
+│   │   ├── mod.rs          # pub fn run_verify(args: VerifyArgs) → u8
+│   │   ├── self_hash.rs    # Re-export or call lockfile::self_hash canonical serialization
+│   │   └── members.rs      # Member-by-member filesystem verification
+│   ...
+```
+
+`verify/self_hash.rs` must reuse the exact canonical serialization from `lockfile/self_hash.rs`. The serialization algorithm is shared — verify does not implement its own. Either:
+- (a) Extract canonical serialization into a shared module used by both `lockfile/self_hash.rs` and `verify/self_hash.rs`, or
+- (b) `verify/self_hash.rs` calls `lockfile::self_hash::canonical_serialize()` directly.
+
+Option (b) is simpler for v0.
+
+---
+
+### Testing requirements
+
+#### Unit tests
+
+| Area | Tests |
+|------|-------|
+| Self-hash verification | Valid lockfile round-trip: create → verify → VERIFY_OK |
+| Tampered lockfile | Modify any field after creation → VERIFY_FAILED |
+| Missing `lock_hash` | Lockfile without `lock_hash` → E_BAD_LOCKFILE refusal |
+| Missing `members` | Lockfile without `members` → E_BAD_LOCKFILE refusal |
+| Unknown version | `"version": "lock.v99"` → E_UNSUPPORTED_VERSION refusal |
+| Absolute member path | Member path `/etc/passwd` → E_BAD_LOCKFILE refusal |
+| Path traversal | Member path `../../etc/shadow` → E_BAD_LOCKFILE refusal |
+| Empty members | `members: []` with valid self-hash → VERIFY_OK |
+| Unknown algorithm | Member `bytes_hash` with `md5:...` prefix → E_UNKNOWN_ALGORITHM refusal |
+
+#### Integration tests
+
+| Scenario | Assertion |
+|----------|-----------|
+| Create lockfile, verify Level 1 | `lock verify out.lock.json` → exit 0, VERIFY_OK |
+| Create lockfile, verify Level 2 | `lock verify out.lock.json --root /data` → exit 0, VERIFY_OK, all members verified |
+| Modify a member file, verify | → exit 1, VERIFY_FAILED, HASH_MISMATCH |
+| Delete a member file, verify | → exit 1, VERIFY_FAILED, MISSING |
+| Lockfile tampered (edit JSON), verify | → exit 1, VERIFY_FAILED, `lock_hash.valid: false`, `members: null` |
+| Root not found | `--root /nonexistent` → exit 2, E_ROOT_NOT_FOUND |
+| `--strict` with I/O error | → exit 1, VERIFY_FAILED (not VERIFY_PARTIAL) |
+| `--json` vs default | JSON output parses as valid JSON; human output has ✓/✗/⚠ markers |
+
+#### Witness tests
+
+| Scenario | Assertion |
+|----------|-----------|
+| Default verify run | Witness record with `params.subcommand: "verify"` appended |
+| `--no-witness` | No witness record written |
+| Verify outcome in witness | `outcome` matches verify result (VERIFY_OK/VERIFY_FAILED/etc.) |
+| Witness query finds verify records | `lock witness query --outcome VERIFY_OK` includes verify runs |
+
+---
+
+### v0.1 scope for verify
+
+**Ship this:**
+- Level 1: self-hash verification
+- Level 2: member verification with `--root`
+- Human-readable and `--json` output
+- `--strict` flag
+- Refusal codes: `E_IO`, `E_BAD_LOCKFILE`, `E_UNSUPPORTED_VERSION`, `E_ROOT_NOT_FOUND`, `E_UNKNOWN_ALGORITHM`
+- Witness recording with `params.subcommand: "verify"`
+
+**Defer:**
+- Parallel member hashing (`--jobs`)
+- Fingerprint `content_hash` re-verification
+- `tool_versions` verification against installed binaries
+- `profiles` entry verification
+- Integration with `pack verify`
+- `--output <FILE>` for writing results to a file

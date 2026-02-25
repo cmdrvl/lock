@@ -100,6 +100,88 @@
           "~/.epistemic/witness.jsonl"
         ]
       }
+    },
+    {
+      "name": "verify",
+      "description": "Verify lockfile integrity and optionally member content",
+      "status": "available",
+      "usage": "lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]",
+      "arguments": [
+        {
+          "name": "lockfile",
+          "type": "file_path",
+          "required": true,
+          "position": 0,
+          "description": "Path to the lockfile to verify"
+        }
+      ],
+      "options": [
+        {
+          "name": "root",
+          "flag": "--root",
+          "type": "directory_path",
+          "description": "Root directory for member verification. Without this, only self-hash is checked."
+        },
+        {
+          "name": "json",
+          "flag": "--json",
+          "type": "flag",
+          "description": "Emit structured JSON output (default is human-readable)"
+        },
+        {
+          "name": "no_witness",
+          "flag": "--no-witness",
+          "type": "flag",
+          "description": "Suppress witness ledger recording for this run"
+        },
+        {
+          "name": "strict",
+          "flag": "--strict",
+          "type": "flag",
+          "description": "Promote VERIFY_PARTIAL to VERIFY_FAILED"
+        }
+      ],
+      "exit_codes": {
+        "0": {
+          "meaning": "VERIFY_OK",
+          "domain": "positive"
+        },
+        "1": {
+          "meaning": "VERIFY_FAILED or VERIFY_PARTIAL",
+          "domain": "negative"
+        },
+        "2": {
+          "meaning": "REFUSAL",
+          "domain": "error"
+        }
+      },
+      "refusals": [
+        {
+          "code": "E_IO",
+          "message": "Cannot read lockfile",
+          "action": "check_path"
+        },
+        {
+          "code": "E_BAD_LOCKFILE",
+          "message": "Malformed JSON or missing required fields",
+          "action": "regenerate_lockfile"
+        },
+        {
+          "code": "E_UNSUPPORTED_VERSION",
+          "message": "Lockfile version not supported",
+          "action": "upgrade_tool"
+        },
+        {
+          "code": "E_ROOT_NOT_FOUND",
+          "message": "Root directory does not exist",
+          "action": "check_path"
+        },
+        {
+          "code": "E_UNKNOWN_ALGORITHM",
+          "message": "Unrecognized hash algorithm prefix",
+          "action": "regenerate_lockfile"
+        }
+      ]
     }
   ],
 

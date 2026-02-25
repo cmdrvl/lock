@@ -42,6 +42,7 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 | `src/lockfile/` | Member/skipped construction + sorting |
 | `src/lockfile/self_hash.rs` | Canonical serialization + SHA256 |
 | `src/refusal/` | Refusal envelope, codes, details |
+| `src/verify/` | Lockfile verification (self-hash + member content) |
 | `src/witness/` | Witness append/query behavior |
 | `operator.json` | Machine-readable operator contract |
 
@@ -102,6 +103,10 @@ Ambient witness semantics must match spine conventions (`shape`/`rvl` parity):
 - Append by default
 - `--no-witness` opt-out
 - Witness failures do not mutate domain outcome semantics
+
+### 7. Verify shares canonical serialization
+
+`lock verify` must reuse the exact canonical serialization from `lockfile/self_hash.rs`. Verify does not implement its own serialization — a divergence would produce false tamper detection. Call `lockfile::self_hash::canonical_serialize()` directly or extract into a shared module.
 
 ---
 
