@@ -5,6 +5,7 @@
   "description": "Dataset lockfile tool: pins artifacts, fingerprints, and tool versions into a self-hashed immutable JSON artifact",
   "repository": "https://github.com/cmdrvl/lock",
   "license": "MIT",
+  "agent_guide": "https://github.com/cmdrvl/.github/blob/main/profile/AGENT_PROMPT.md",
 
   "invocation": {
     "binary": "lock",
