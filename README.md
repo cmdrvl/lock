@@ -6,9 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub release](https://img.shields.io/github/v/release/cmdrvl/lock)](https://github.com/cmdrvl/lock/releases)
 
-**Dataset lockfiles — like Cargo.lock for data — pinning artifacts, fingerprints, tool versions, and assumptions into a self-hashed, immutable, reproducible snapshot.**
-
-No AI. No inference. Pure deterministic hashing and serialization.
+**Cargo.lock for data. One tamper-evident snapshot of every artifact, hash, and tool version in your pipeline.**
 
 ```bash
 brew install cmdrvl/tap/lock
@@ -18,22 +16,16 @@ brew install cmdrvl/tap/lock
 
 ---
 
-## TL;DR
+You scanned, hashed, and fingerprinted 47 files. Six months from now, someone asks: "what exactly was in that delivery?" You could point them at a directory listing. Or a spreadsheet. Or you could hand them a single file that answers the question with cryptographic certainty — and proves it hasn't been altered since the day it was created.
 
-**The Problem**: After scanning, hashing, and fingerprinting your data artifacts, there's no single tamper-evident record of what was produced. Teams rely on ad-hoc manifests, scattered checksums, and uncertain tool provenance.
+**lock pins the entire pipeline output into one self-hashed JSON lockfile.** Every artifact, its hash, its fingerprint match, and the exact tool versions that processed it. The lockfile's own `lock_hash` is the SHA-256 of its canonical contents — if the hash verifies, the file is exactly what was produced. If anything was modified, even whitespace, the hash breaks.
 
-**The Solution**: One self-hashed JSON lockfile that captures exactly which artifacts were included, which were skipped and why, and which tool versions produced the result. If `lock_hash` verifies, the lockfile is exactly what was produced.
+### What makes this different
 
-### Why Use lock?
-
-| Feature | What It Does |
-|---------|--------------|
-| **Self-hashed** | `lock_hash` = SHA256 of the canonical lockfile — tamper-evident by construction |
-| **Skipped tracking** | Records that couldn't be processed are captured with reasons, not silently dropped |
-| **Tool provenance** | Records which version of vacuum, hash, fingerprint, and lock produced the result |
-| **Three clear outcomes** | LOCK_CREATED, LOCK_PARTIAL, or REFUSAL — never ambiguous |
-| **Stream pipeline native** | Reads JSONL from stdin — pipes directly from `vacuum \| hash \| fingerprint` |
-| **Deterministic** | Same inputs always produce the same lockfile — sorted members, canonical JSON |
+- **Self-hashed by construction** — `lock_hash` is computed over canonical JSON with sorted keys. Any edit to the lockfile invalidates it. No external signature needed.
+- **Two-level verification** — `lock verify` checks the self-hash (was this file tampered with?). Add `--root /data/` to also verify that every member file on disk still matches.
+- **Skipped records are first-class** — files that couldn't be processed aren't silently dropped; they're captured in the `skipped` array with reasons, and the exit code tells you (exit 1 = LOCK_PARTIAL).
+- **Tool provenance built in** — the lockfile records which version of vacuum, hash, fingerprint, and lock produced it. Reproducibility is traceable.
 
 ---
 
