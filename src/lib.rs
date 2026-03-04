@@ -33,7 +33,17 @@ pub fn run_lock(cli: &cli::Cli) -> u8 {
         },
     };
 
-    print!("{}", orchestrated.payload_json);
+    if let Some(ref output_path) = cli.output {
+        if let Err(e) = std::fs::write(output_path, &orchestrated.payload_json) {
+            eprintln!(
+                "lock: error: failed to write output file '{}': {e}",
+                output_path.display()
+            );
+            return 2;
+        }
+    } else {
+        print!("{}", orchestrated.payload_json);
+    }
 
     // Append witness record unless --no-witness.
     if !cli.no_witness {
@@ -171,6 +181,7 @@ mod tests {
             dataset_id: Some("dataset-a".to_owned()),
             as_of: Some("2026-02-24T00:00:00Z".to_owned()),
             note: Some("note".to_owned()),
+            output: None,
             no_witness: false,
             describe: false,
             schema: false,
@@ -264,6 +275,30 @@ mod tests {
         assert_eq!(parsed["skipped_count"], 0);
         assert_eq!(parsed["member_count"], 1);
         assert_eq!(parsed["version"], "lock.v0");
+    }
+
+    #[test]
+    fn run_lock_output_flag_writes_to_file() {
+        let (_input_dir, input_path) = write_input_file(concat!(
+            r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaa","size":1,"tool_versions":{"hash":"0.1.0"}}"#,
+            "\n"
+        ));
+        let out_dir = tempfile::tempdir().expect("create temp dir");
+        let out_path = out_dir.path().join("test.lock.json");
+        let ledger_dir = tempfile::tempdir().expect("create temp dir");
+        let ledger_path = ledger_dir.path().join("witness.jsonl");
+        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", &ledger_path);
+
+        let mut cli = make_file_cli(input_path, true);
+        cli.output = Some(out_path.clone());
+
+        let code = run_lock(&cli);
+
+        assert_eq!(code, 0);
+        let contents = fs::read_to_string(&out_path).expect("read output file");
+        let parsed: serde_json::Value = serde_json::from_str(&contents).expect("valid JSON");
+        assert_eq!(parsed["version"], "lock.v0");
+        assert_eq!(parsed["member_count"], 1);
     }
 
     #[test]

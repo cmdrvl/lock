@@ -1,7 +1,7 @@
 {
   "schema_version": "operator.v0",
   "name": "lock",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Dataset lockfile tool: pins artifacts, fingerprints, and tool versions into a self-hashed immutable JSON artifact",
   "repository": "https://github.com/cmdrvl/lock",
   "license": "MIT",
@@ -47,6 +47,12 @@
       "flag": "--note",
       "type": "string",
       "description": "Free-text annotation"
+    },
+    {
+      "name": "output",
+      "flag": "--output",
+      "type": "file_path",
+      "description": "Write lockfile to this path instead of stdout (avoids self-inclusion when path is inside vacuum root)"
     },
     {
       "name": "no_witness",

@@ -25,6 +25,10 @@ pub struct Cli {
     #[arg(long)]
     pub note: Option<String>,
 
+    /// Write lockfile to this path instead of stdout (avoids self-inclusion when path is inside vacuum root)
+    #[arg(long, value_name = "PATH")]
+    pub output: Option<PathBuf>,
+
     /// Suppress witness ledger recording for this run
     #[arg(long)]
     pub no_witness: bool,
@@ -55,7 +59,7 @@ pub struct VerifyArgs {
     /// Path to the lockfile to verify
     pub lockfile: std::path::PathBuf,
 
-    /// Root directory for member verification (enables Level 2)
+    /// Root directory for resolving member paths (enables content verification; without this, only self-hash is checked)
     #[arg(long)]
     pub root: Option<std::path::PathBuf>,
 
@@ -408,6 +412,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_output_flag() {
+        let cli = Cli::try_parse_from(["lock", "--output", "out.lock.json"]).unwrap();
+        assert_eq!(cli.output, Some(PathBuf::from("out.lock.json")));
+    }
+
+    #[test]
     fn reject_unknown_flag() {
         let result = Cli::try_parse_from(["lock", "--bogus"]);
         assert!(result.is_err());
@@ -419,7 +429,7 @@ mod tests {
             serde_json::from_str(OPERATOR_JSON).expect("operator.json must be valid JSON");
         assert_eq!(parsed["name"], "lock");
         assert_eq!(parsed["schema_version"], "operator.v0");
-        assert_eq!(parsed["version"], "0.2.0");
+        assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
