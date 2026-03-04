@@ -70,7 +70,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test
+        run: cargo test -- --test-threads=1
 
       - name: Verify publish artifact with dry-run
         run: cargo publish --dry-run --locked
