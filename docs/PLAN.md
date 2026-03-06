@@ -44,13 +44,13 @@ It tells you *exactly which files, hashes, fingerprints, and tool versions were 
 `lock` is the terminal tool in the stream pipeline. It consumes the JSONL stream and produces a single JSON artifact:
 
 ```bash
-vacuum /data/dec/ | hash | lock --dataset-id "raw-dec" > raw.lock.json
+vacuum /data/dec/ | hashbytes | lock --dataset-id "raw-dec" > raw.lock.json
 ```
 
 With fingerprinting:
 
 ```bash
-vacuum /data/models/ | hash | fingerprint --fp argus-model.v1 \
+vacuum /data/models/ | hashbytes | fingerprint --fp argus-model.v1 \
   | lock --dataset-id "argus-models-2025-12" --as-of "2025-12-31" > models.lock.json
 ```
 
@@ -63,7 +63,7 @@ lock --dataset-id "q4-final" --note "Final delivery after restatement" < fingerp
 Lock then seal as evidence:
 
 ```bash
-vacuum /data/dec/ | hash | fingerprint --fp csv.v0 \
+vacuum /data/dec/ | hashbytes | fingerprint --fp csv.v0 \
   | lock --dataset-id "dec" > dec.lock.json && pack seal dec.lock.json --output evidence/dec/
 ```
 
@@ -231,7 +231,7 @@ Records missing `bytes_hash` (without `_skipped: true`) trigger a refusal (`E_MI
       "count": 3,
       "sample_paths": ["data/model.xlsx", "data/tape.csv", "data/readme.pdf"]
     },
-    "next_command": "vacuum /data/ | hash | lock --dataset-id \"my-dataset\""
+    "next_command": "vacuum /data/ | hashbytes | lock --dataset-id \"my-dataset\""
   }
 }
 ```
@@ -1157,7 +1157,7 @@ When `--json` is not specified, `lock verify` emits concise human-readable outpu
       "path": "dec.lock.json",
       "missing_fields": ["members"]
     },
-    "next_command": "vacuum /data/dec | hash | lock --dataset-id \"dec\" > dec.lock.json"
+    "next_command": "vacuum /data/dec | hashbytes | lock --dataset-id \"dec\" > dec.lock.json"
   }
 }
 ```

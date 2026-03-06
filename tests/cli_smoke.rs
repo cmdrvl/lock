@@ -154,3 +154,35 @@ fn smoke_witness_query_outcome_filter_works() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["outcome"], "REFUSAL");
 }
+
+#[test]
+fn describe_short_circuits_even_when_verify_subcommand_is_present() {
+    let output = run_lock(&["--describe", "verify", "/nonexistent/lock.json"], None);
+    assert_eq!(output.status.code(), Some(0));
+
+    let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["name"], "lock");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn schema_short_circuits_even_when_witness_subcommand_is_present() {
+    let output = run_lock(&["--schema", "witness", "last", "--json"], None);
+    assert_eq!(output.status.code(), Some(0));
+
+    let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        parsed["$schema"],
+        "https://json-schema.org/draft/2020-12/schema"
+    );
+    assert_eq!(parsed["title"], "lock.v0");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).trim().is_empty(),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

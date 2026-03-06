@@ -143,19 +143,19 @@ pub enum WitnessAction {
 pub fn run() -> u8 {
     let cli = Cli::parse();
 
-    // Subcommands dispatch first (before input validation).
-    match &cli.command {
-        Some(Command::Verify(args)) => return dispatch_verify(args),
-        Some(Command::Witness { action }) => return dispatch_witness(action),
-        None => {}
-    }
-
-    // --describe and --schema are checked before input is opened.
+    // --describe and --schema short-circuit before any subcommand dispatch.
     if cli.describe {
         return dispatch_describe();
     }
     if cli.schema {
         return dispatch_schema();
+    }
+
+    // Subcommands dispatch after display-mode short-circuits.
+    match &cli.command {
+        Some(Command::Verify(args)) => return dispatch_verify(args),
+        Some(Command::Witness { action }) => return dispatch_witness(action),
+        None => {}
     }
 
     // Main lock flow — delegates to orchestration (bd-1ab).

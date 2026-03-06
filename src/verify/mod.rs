@@ -186,6 +186,99 @@ pub enum ValidationResult {
     Refusal(String),
 }
 
+fn bad_lockfile_type_error(field: &str, expected: &str) -> ValidationResult {
+    ValidationResult::Refusal(refusal_bad_lockfile_parse(&format!(
+        "field '{field}' must be a {expected}"
+    )))
+}
+
+fn bad_lockfile_member_type_error(
+    member_index: usize,
+    field: &str,
+    expected: &str,
+) -> ValidationResult {
+    ValidationResult::Refusal(refusal_bad_lockfile_parse(&format!(
+        "members[{member_index}].{field} must be a {expected}"
+    )))
+}
+
+fn missing_member_fields_refusal(member_index: usize, fields: &[&str]) -> ValidationResult {
+    let missing: Vec<String> = fields
+        .iter()
+        .map(|field| format!("members[{member_index}].{field}"))
+        .collect();
+    let missing_refs: Vec<&str> = missing.iter().map(String::as_str).collect();
+    ValidationResult::Refusal(refusal_bad_lockfile_missing_fields(&missing_refs))
+}
+
+fn is_absolute_member_path(path: &str) -> bool {
+    if path.starts_with('/') || path.starts_with('\\') {
+        return true;
+    }
+
+    let bytes = path.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+fn validate_member(member: &Value, member_index: usize) -> ValidationResult {
+    let Some(member) = member.as_object() else {
+        return ValidationResult::Refusal(refusal_bad_lockfile_parse(&format!(
+            "members[{member_index}] must be an object"
+        )));
+    };
+
+    let mut missing = Vec::new();
+
+    let path = match member.get("path") {
+        Some(Value::String(path)) if !path.is_empty() => Some(path.as_str()),
+        Some(Value::String(_)) | Some(Value::Null) | None => {
+            missing.push("path");
+            None
+        }
+        Some(_) => return bad_lockfile_member_type_error(member_index, "path", "string"),
+    };
+
+    match member.get("bytes_hash") {
+        Some(Value::String(hash)) if !hash.is_empty() => {}
+        Some(Value::String(_)) | Some(Value::Null) | None => missing.push("bytes_hash"),
+        Some(_) => return bad_lockfile_member_type_error(member_index, "bytes_hash", "string"),
+    }
+
+    match member.get("size") {
+        Some(Value::Number(size)) if size.as_u64().is_some() => {}
+        Some(Value::Null) | None => missing.push("size"),
+        Some(_) => return bad_lockfile_member_type_error(member_index, "size", "u64"),
+    }
+
+    if !missing.is_empty() {
+        return missing_member_fields_refusal(member_index, &missing);
+    }
+
+    let path = path.expect("validated above");
+
+    if is_absolute_member_path(path) {
+        return ValidationResult::Refusal(refusal_bad_lockfile_absolute_path(member_index, path));
+    }
+
+    if path.split('/').any(|seg| seg == "..") || path.split('\\').any(|seg| seg == "..") {
+        return ValidationResult::Refusal(refusal_bad_lockfile_traversal(member_index, path));
+    }
+
+    let hash = member
+        .get("bytes_hash")
+        .and_then(Value::as_str)
+        .expect("validated above");
+    let prefix = hash.split(':').next().unwrap_or_default();
+    if !SUPPORTED_ALGORITHMS.contains(&prefix) {
+        return ValidationResult::Refusal(refusal_unknown_algorithm(path, prefix));
+    }
+
+    ValidationResult::Ok(Value::Null)
+}
+
 /// Validate a lockfile JSON string.
 ///
 /// Checks:
@@ -217,33 +310,30 @@ pub fn validate_lockfile_json(json: &str) -> ValidationResult {
     }
 
     // Check version.
-    let version = value["version"].as_str().unwrap_or("");
+    let version = match value.get("version") {
+        Some(Value::String(version)) => version.as_str(),
+        Some(_) => return bad_lockfile_type_error("version", "string"),
+        None => unreachable!("checked above"),
+    };
     if !SUPPORTED_VERSIONS.contains(&version) {
         return ValidationResult::Refusal(refusal_unsupported_version(version));
     }
 
-    // Check member paths.
-    if let Some(members) = value["members"].as_array() {
-        for (i, member) in members.iter().enumerate() {
-            let path = member.get("path").and_then(Value::as_str).unwrap_or("");
+    match value.get("lock_hash") {
+        Some(Value::String(_)) => {}
+        Some(_) => return bad_lockfile_type_error("lock_hash", "string"),
+        None => unreachable!("checked above"),
+    }
 
-            // Absolute path check.
-            if path.starts_with('/') || path.starts_with('\\') {
-                return ValidationResult::Refusal(refusal_bad_lockfile_absolute_path(i, path));
-            }
+    let members = match value.get("members") {
+        Some(Value::Array(members)) => members,
+        Some(_) => return bad_lockfile_type_error("members", "array"),
+        None => unreachable!("checked above"),
+    };
 
-            // Traversal check.
-            if path.split('/').any(|seg| seg == "..") || path.split('\\').any(|seg| seg == "..") {
-                return ValidationResult::Refusal(refusal_bad_lockfile_traversal(i, path));
-            }
-
-            // Algorithm prefix check.
-            if let Some(hash) = member.get("bytes_hash").and_then(Value::as_str)
-                && let Some(prefix) = hash.split(':').next()
-                && !SUPPORTED_ALGORITHMS.contains(&prefix)
-            {
-                return ValidationResult::Refusal(refusal_unknown_algorithm(path, prefix));
-            }
+    for (i, member) in members.iter().enumerate() {
+        if let ValidationResult::Refusal(refusal) = validate_member(member, i) {
+            return ValidationResult::Refusal(refusal);
         }
     }
 
@@ -634,6 +724,52 @@ mod tests {
     }
 
     #[test]
+    fn validate_lock_hash_must_be_string() {
+        let json = serde_json::json!({
+            "version": "lock.v0",
+            "lock_hash": 42,
+            "members": []
+        })
+        .to_string();
+        match validate_lockfile_json(&json) {
+            ValidationResult::Refusal(r) => {
+                let parsed: Value = serde_json::from_str(&r).unwrap();
+                assert_eq!(parsed["refusal"]["code"], "E_BAD_LOCKFILE");
+                assert!(
+                    parsed["refusal"]["detail"]["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("field 'lock_hash' must be a string")
+                );
+            }
+            ValidationResult::Ok(_) => panic!("expected refusal"),
+        }
+    }
+
+    #[test]
+    fn validate_members_must_be_array() {
+        let json = serde_json::json!({
+            "version": "lock.v0",
+            "lock_hash": "sha256:abc",
+            "members": {}
+        })
+        .to_string();
+        match validate_lockfile_json(&json) {
+            ValidationResult::Refusal(r) => {
+                let parsed: Value = serde_json::from_str(&r).unwrap();
+                assert_eq!(parsed["refusal"]["code"], "E_BAD_LOCKFILE");
+                assert!(
+                    parsed["refusal"]["detail"]["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("field 'members' must be a array")
+                );
+            }
+            ValidationResult::Ok(_) => panic!("expected refusal"),
+        }
+    }
+
+    #[test]
     fn validate_multiple_missing_fields() {
         let json = serde_json::json!({}).to_string();
         match validate_lockfile_json(&json) {
@@ -667,6 +803,54 @@ mod tests {
     }
 
     #[test]
+    fn validate_member_missing_required_fields() {
+        let json = serde_json::json!({
+            "version": "lock.v0",
+            "lock_hash": "sha256:abc",
+            "members": [
+                { "path": "data.csv" }
+            ]
+        })
+        .to_string();
+        match validate_lockfile_json(&json) {
+            ValidationResult::Refusal(r) => {
+                let parsed: Value = serde_json::from_str(&r).unwrap();
+                let fields = parsed["refusal"]["detail"]["missing_fields"]
+                    .as_array()
+                    .unwrap();
+                assert!(fields.contains(&Value::String("members[0].bytes_hash".to_string())));
+                assert!(fields.contains(&Value::String("members[0].size".to_string())));
+            }
+            ValidationResult::Ok(_) => panic!("expected refusal"),
+        }
+    }
+
+    #[test]
+    fn validate_member_size_must_be_u64() {
+        let json = serde_json::json!({
+            "version": "lock.v0",
+            "lock_hash": "sha256:abc",
+            "members": [
+                { "path": "data.csv", "bytes_hash": "sha256:aaa", "size": -1 }
+            ]
+        })
+        .to_string();
+        match validate_lockfile_json(&json) {
+            ValidationResult::Refusal(r) => {
+                let parsed: Value = serde_json::from_str(&r).unwrap();
+                assert_eq!(parsed["refusal"]["code"], "E_BAD_LOCKFILE");
+                assert!(
+                    parsed["refusal"]["detail"]["error"]
+                        .as_str()
+                        .unwrap()
+                        .contains("members[0].size must be a u64")
+                );
+            }
+            ValidationResult::Ok(_) => panic!("expected refusal"),
+        }
+    }
+
+    #[test]
     fn validate_absolute_member_path() {
         let json = serde_json::json!({
             "version": "lock.v0",
@@ -682,6 +866,26 @@ mod tests {
                 assert_eq!(parsed["refusal"]["code"], "E_BAD_LOCKFILE");
                 assert_eq!(parsed["refusal"]["detail"]["member_index"], 0);
                 assert_eq!(parsed["refusal"]["detail"]["member_path"], "/etc/passwd");
+            }
+            ValidationResult::Ok(_) => panic!("expected refusal"),
+        }
+    }
+
+    #[test]
+    fn validate_windows_absolute_member_path() {
+        let json = serde_json::json!({
+            "version": "lock.v0",
+            "lock_hash": "sha256:abc",
+            "members": [
+                { "path": "C:\\\\Windows\\\\System32\\\\drivers\\\\etc\\\\hosts", "bytes_hash": "sha256:aaa", "size": 100 }
+            ]
+        })
+        .to_string();
+        match validate_lockfile_json(&json) {
+            ValidationResult::Refusal(r) => {
+                let parsed: Value = serde_json::from_str(&r).unwrap();
+                assert_eq!(parsed["refusal"]["code"], "E_BAD_LOCKFILE");
+                assert_eq!(parsed["refusal"]["detail"]["member_index"], 0);
             }
             ValidationResult::Ok(_) => panic!("expected refusal"),
         }

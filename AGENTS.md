@@ -9,17 +9,17 @@
 `lock` creates a single self-hashed dataset lockfile from stream pipeline JSONL records. It is the **artifact tool** at the end of the pipeline:
 
 ```
-vacuum → hash → fingerprint → lock → pack
+vacuum → hashbytes → fingerprint → lock → pack
 ```
 
 ### Quick Reference
 
 ```bash
 # Core pipeline
-vacuum /data/dec | hash | lock --dataset-id "raw-dec" > raw.lock.json
+vacuum /data/dec | hashbytes | lock --dataset-id "raw-dec" > raw.lock.json
 
 # With fingerprinting
-vacuum /data | hash | fingerprint --fp csv.v0 \
+vacuum /data | hashbytes | fingerprint --fp csv.v0 \
   | lock --dataset-id "dec" > dec.lock.json
 
 # Quality gate
@@ -149,7 +149,7 @@ cargo test
 - Self-hash verification round-trip
 - `tool_versions` merge behavior
 - Witness append/query paths
-- E2E spine compatibility (`vacuum → hash → fingerprint → lock`)
+- E2E spine compatibility (`vacuum → hashbytes → fingerprint → lock`)
 
 ---
 
