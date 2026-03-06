@@ -32,8 +32,10 @@ fn run_spine(
     note: Option<&str>,
 ) -> SpineResult {
     let result = read_jsonl_reader(Cursor::new(jsonl)).expect("JSONL should parse");
-    let ReadResult::Records(records) = result else {
-        panic!("expected records, got Empty");
+    assert!(matches!(result, ReadResult::Records(_)), "expected records");
+    let records = match result {
+        ReadResult::Records(records) => records,
+        ReadResult::Empty => Vec::new(),
     };
 
     validate_records(&records).expect("validation should pass");
@@ -84,13 +86,18 @@ fn vacuum_only_records_refuse_missing_hash() {
     );
 
     let result = read_jsonl_reader(Cursor::new(jsonl)).expect("should parse");
+    assert!(matches!(result, ReadResult::Records(_)), "expected records");
     let ReadResult::Records(records) = result else {
-        panic!("expected records");
+        return;
     };
 
     let err = validate_records(&records).expect_err("vacuum-only records lack bytes_hash");
+    assert!(
+        matches!(err, lock::input::ValidationError::MissingHash(_)),
+        "expected MissingHash"
+    );
     let lock::input::ValidationError::MissingHash(detail) = err else {
-        panic!("expected MissingHash");
+        return;
     };
     assert_eq!(detail.count, 2);
 }
