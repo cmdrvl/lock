@@ -156,6 +156,39 @@ fn smoke_witness_query_outcome_filter_works() {
 }
 
 #[test]
+fn smoke_witness_query_input_hash_filter_works_for_real_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = dir.path().join("witness.jsonl");
+    let manifest_jsonl =
+        b"{\"version\":\"hash.v0\",\"relative_path\":\"a.csv\",\"bytes_hash\":\"sha256:aaaaaaaa\",\"size\":10}\n";
+    let input = write_manifest(
+        &dir,
+        "created.jsonl",
+        std::str::from_utf8(manifest_jsonl).unwrap(),
+    );
+
+    let run_output = run_lock(&[input.to_str().unwrap()], Some(&ledger));
+    assert_eq!(run_output.status.code(), Some(0));
+
+    let input_hash = format!("blake3:{}", blake3::hash(manifest_jsonl).to_hex());
+    let query_args = vec![
+        "witness",
+        "query",
+        "--input-hash",
+        input_hash.as_str(),
+        "--json",
+    ];
+    let query_output = run_lock(&query_args, Some(&ledger));
+    assert_eq!(query_output.status.code(), Some(0));
+
+    let parsed: Value = serde_json::from_slice(&query_output.stdout).unwrap();
+    let items = parsed.as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["inputs"][0]["hash"], input_hash);
+    assert_eq!(items[0]["outcome"], "LOCK_CREATED");
+}
+
+#[test]
 fn describe_short_circuits_even_when_verify_subcommand_is_present() {
     let output = run_lock(&["--describe", "verify", "/nonexistent/lock.json"], None);
     assert_eq!(output.status.code(), Some(0));

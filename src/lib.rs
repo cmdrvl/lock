@@ -21,17 +21,32 @@ struct OrchestrationOutput {
 }
 
 pub fn run_lock(cli: &cli::Cli) -> u8 {
-    let orchestrated = match input::read_jsonl(cli.input.as_deref()) {
-        Ok(read_result) => orchestrate_from_read_result(cli, read_result),
-        Err(error) => match error {
-            input::InputError::Parse(detail) => {
-                refusal_output(refusal::bad_input_parse(detail.line, &detail.error))
+    let (orchestrated, input_hash, input_bytes) =
+        match input::read_jsonl_with_source(cli.input.as_deref()) {
+            Ok(read) => (
+                orchestrate_from_read_result(cli, read.result),
+                Some(read.source.source_hash),
+                Some(read.source.source_bytes),
+            ),
+            Err(error) => {
+                let input_hash = error
+                    .source
+                    .as_ref()
+                    .map(|source| source.source_hash.clone());
+                let input_bytes = error.source.as_ref().map(|source| source.source_bytes);
+
+                let orchestrated = match error.error {
+                    input::InputError::Parse(detail) => {
+                        refusal_output(refusal::bad_input_parse(detail.line, &detail.error))
+                    }
+                    input::InputError::Io(io_error) => {
+                        refusal_output(refusal::bad_input_parse(0, &io_error.to_string()))
+                    }
+                };
+
+                (orchestrated, input_hash, input_bytes)
             }
-            input::InputError::Io(io_error) => {
-                refusal_output(refusal::bad_input_parse(0, &io_error.to_string()))
-            }
-        },
-    };
+        };
 
     if let Some(ref output_path) = cli.output {
         if let Err(e) = std::fs::write(output_path, &orchestrated.payload_json) {
@@ -65,9 +80,8 @@ pub fn run_lock(cli: &cli::Cli) -> u8 {
             "note": cli.note,
         });
 
-        let inputs = serde_json::json!([
-            { "path": input_path, "hash": null, "bytes": null }
-        ]);
+        let inputs =
+            serde_json::json!([{ "path": input_path, "hash": input_hash, "bytes": input_bytes }]);
 
         witness::append_witness_record(
             outcome_str,
@@ -313,10 +327,11 @@ mod tests {
 
     #[test]
     fn run_lock_appends_witness_for_lock_created_by_default() {
-        let (_input_dir, input_path) = write_input_file(concat!(
+        let input_jsonl = concat!(
             r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaa","size":1,"tool_versions":{"hash":"0.1.0"}}"#,
             "\n"
-        ));
+        );
+        let (_input_dir, input_path) = write_input_file(input_jsonl);
         let ledger_dir = tempfile::tempdir().expect("create temp dir");
         let ledger_path = ledger_dir.path().join("witness.jsonl");
         let _guard = EnvGuard::set("EPISTEMIC_WITNESS", &ledger_path);
@@ -327,6 +342,11 @@ mod tests {
         let record = read_single_witness_record(&ledger_path);
         assert_eq!(record["outcome"], "LOCK_CREATED");
         assert_eq!(record["exit_code"], 0);
+        assert_eq!(
+            record["inputs"][0]["hash"],
+            format!("blake3:{}", blake3::hash(input_jsonl.as_bytes()).to_hex())
+        );
+        assert_eq!(record["inputs"][0]["bytes"], input_jsonl.len() as u64);
     }
 
     #[test]
@@ -365,6 +385,7 @@ mod tests {
         let record = read_single_witness_record(&ledger_path);
         assert_eq!(record["outcome"], "REFUSAL");
         assert_eq!(record["exit_code"], 2);
+        assert!(record["inputs"][0]["hash"].as_str().is_some());
     }
 
     #[test]

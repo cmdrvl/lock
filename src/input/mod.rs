@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Cursor, Read};
 use std::path::Path;
 
 use serde_json::Value;
@@ -18,6 +18,18 @@ pub struct InputRecord {
 pub enum ReadResult {
     Empty,
     Records(Vec<InputRecord>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceMetadata {
+    pub source_hash: String,
+    pub source_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReadWithSource {
+    pub result: ReadResult,
+    pub source: SourceMetadata,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,6 +54,12 @@ pub struct MissingHashDetail {
 pub enum InputError {
     Io(io::Error),
     Parse(ParseErrorDetail),
+}
+
+#[derive(Debug)]
+pub struct ReadWithSourceError {
+    pub error: InputError,
+    pub source: Option<SourceMetadata>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,16 +95,52 @@ impl std::fmt::Display for InputError {
 impl std::error::Error for InputError {}
 
 pub fn read_jsonl(input: Option<&Path>) -> Result<ReadResult, InputError> {
+    read_jsonl_with_source(input)
+        .map(|read| read.result)
+        .map_err(|error| error.error)
+}
+
+pub fn read_jsonl_with_source(input: Option<&Path>) -> Result<ReadWithSource, ReadWithSourceError> {
     match input {
         Some(path) => {
-            let file = File::open(path).map_err(InputError::Io)?;
-            read_jsonl_reader(BufReader::new(file))
+            let file = File::open(path).map_err(|error| ReadWithSourceError {
+                error: InputError::Io(error),
+                source: None,
+            })?;
+            read_jsonl_source_reader(BufReader::new(file))
         }
         None => {
             let stdin = io::stdin();
-            read_jsonl_reader(stdin.lock())
+            read_jsonl_source_reader(stdin.lock())
         }
     }
+}
+
+fn read_jsonl_source_reader<R>(mut reader: R) -> Result<ReadWithSource, ReadWithSourceError>
+where
+    R: Read,
+{
+    let mut bytes = Vec::new();
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| ReadWithSourceError {
+            error: InputError::Io(error),
+            source: None,
+        })?;
+
+    let source = SourceMetadata {
+        source_hash: format!("blake3:{}", blake3::hash(&bytes).to_hex()),
+        source_bytes: bytes.len() as u64,
+    };
+
+    let result = read_jsonl_reader(BufReader::new(Cursor::new(bytes))).map_err(|error| {
+        ReadWithSourceError {
+            error,
+            source: Some(source.clone()),
+        }
+    })?;
+
+    Ok(ReadWithSource { result, source })
 }
 
 pub fn read_jsonl_reader<R>(reader: R) -> Result<ReadResult, InputError>
@@ -203,7 +257,7 @@ mod tests {
 
     use super::{
         InputError, InputRecord, ReadResult, ValidationError, read_jsonl, read_jsonl_reader,
-        validate_records,
+        read_jsonl_with_source, validate_records,
     };
 
     #[test]
@@ -221,8 +275,9 @@ mod tests {
 
         let result = read_jsonl_reader(reader).expect("valid JSONL should parse");
 
+        assert!(matches!(result, ReadResult::Records(_)), "expected records");
         let ReadResult::Records(records) = result else {
-            panic!("expected records");
+            return;
         };
 
         assert_eq!(records.len(), 2);
@@ -238,8 +293,12 @@ mod tests {
 
         let error = read_jsonl_reader(reader).expect_err("invalid JSON must error");
 
+        assert!(
+            matches!(error, InputError::Parse(_)),
+            "expected parse error"
+        );
         let InputError::Parse(detail) = error else {
-            panic!("expected parse error");
+            return;
         };
 
         assert_eq!(detail.line, 2);
@@ -252,8 +311,12 @@ mod tests {
 
         let error = read_jsonl_reader(reader).expect_err("blank lines must error");
 
+        assert!(
+            matches!(error, InputError::Parse(_)),
+            "expected parse error"
+        );
         let InputError::Parse(detail) = error else {
-            panic!("expected parse error");
+            return;
         };
 
         assert_eq!(detail.line, 2);
@@ -273,6 +336,23 @@ mod tests {
     }
 
     #[test]
+    fn read_jsonl_with_source_tracks_hash_and_bytes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input_path = dir.path().join("input.jsonl");
+        let input_jsonl = b"{\"path\":\"a\"}\n";
+        std::fs::write(&input_path, input_jsonl).expect("write input");
+
+        let read = read_jsonl_with_source(Some(&input_path)).expect("source read should succeed");
+
+        assert_eq!(
+            read.source.source_hash,
+            format!("blake3:{}", blake3::hash(input_jsonl).to_hex())
+        );
+        assert_eq!(read.source.source_bytes, input_jsonl.len() as u64);
+        assert!(matches!(read.result, ReadResult::Records(_)));
+    }
+
+    #[test]
     fn validate_records_rejects_missing_version() {
         let records = vec![InputRecord {
             line_number: 4,
@@ -285,8 +365,12 @@ mod tests {
 
         let error = validate_records(&records).expect_err("missing version must fail");
 
+        assert!(
+            matches!(error, ValidationError::BadVersion(_)),
+            "expected bad version"
+        );
         let ValidationError::BadVersion(detail) = error else {
-            panic!("expected bad version");
+            return;
         };
         assert_eq!(detail.line, 4);
         assert_eq!(detail.version, None);
@@ -306,8 +390,12 @@ mod tests {
 
         let error = validate_records(&records).expect_err("unknown version must fail");
 
+        assert!(
+            matches!(error, ValidationError::BadVersion(_)),
+            "expected bad version"
+        );
         let ValidationError::BadVersion(detail) = error else {
-            panic!("expected bad version");
+            return;
         };
         assert_eq!(detail.line, 2);
         assert_eq!(detail.version.as_deref(), Some("hash.v2"));
@@ -360,8 +448,12 @@ mod tests {
 
         let error = validate_records(&records).expect_err("missing hash must fail");
 
+        assert!(
+            matches!(error, ValidationError::MissingHash(_)),
+            "expected missing-hash validation error"
+        );
         let ValidationError::MissingHash(detail) = error else {
-            panic!("expected missing-hash validation error");
+            return;
         };
         assert_eq!(detail.count, 2);
         assert_eq!(
