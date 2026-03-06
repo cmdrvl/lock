@@ -527,7 +527,7 @@ fn classification_sorts_members_lexicographically() {
 }
 
 #[test]
-fn backslash_paths_normalized_to_forward_slash() {
+fn backslash_paths_are_preserved_verbatim() {
     let records = vec![InputRecord {
         line_number: 1,
         value: json!({
@@ -538,7 +538,7 @@ fn backslash_paths_normalized_to_forward_slash() {
     }];
 
     let classification = lockfile::classify_records(&records).expect("should succeed");
-    assert_eq!(classification.members[0].path, "data/sub/file.csv");
+    assert_eq!(classification.members[0].path, r"data\sub\file.csv");
 }
 
 #[test]

@@ -188,16 +188,12 @@ pub fn merge_tool_versions(
 }
 
 fn extract_record_path(value: &Value, line_number: usize) -> Result<String, ClassificationError> {
-    let path = value
+    value
         .get("relative_path")
         .and_then(Value::as_str)
         .or_else(|| value.get("path").and_then(Value::as_str))
-        .ok_or(ClassificationError::MissingPath { line_number })?;
-    Ok(normalize_path(path))
-}
-
-fn normalize_path(path: &str) -> String {
-    path.replace('\\', "/")
+        .map(str::to_owned)
+        .ok_or(ClassificationError::MissingPath { line_number })
 }
 
 fn extract_fingerprint(value: &Value) -> Option<FingerprintResult> {
@@ -328,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_records_sorts_paths_and_normalizes_separators() {
+    fn classify_records_sorts_paths_without_rewriting_backslashes() {
         let records = vec![
             InputRecord {
                 line_number: 1,
@@ -372,7 +368,7 @@ mod tests {
                 .iter()
                 .map(|member| member.path.as_str())
                 .collect::<Vec<_>>(),
-            vec!["member/a.txt", "member/b.txt"]
+            vec![r"member\a.txt", r"member\b.txt"]
         );
         assert_eq!(
             classification
@@ -380,7 +376,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.path.as_str())
                 .collect::<Vec<_>>(),
-            vec!["skip/a.txt", "skip/b.txt"]
+            vec![r"skip\a.txt", r"skip\b.txt"]
         );
     }
 
@@ -416,7 +412,7 @@ mod tests {
         assert_eq!(classification.member_count, 1);
         assert_eq!(classification.skipped_count, 0);
         assert_eq!(classification.outcome, DomainOutcome::LockCreated);
-        assert_eq!(classification.members[0].path, "folder/file.txt");
+        assert_eq!(classification.members[0].path, r"folder\file.txt");
     }
 
     #[test]

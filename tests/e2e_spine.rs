@@ -398,11 +398,11 @@ fn falls_back_to_path_when_relative_path_absent() {
 }
 
 // ---------------------------------------------------------------------------
-// Fixture: Windows-style paths from upstream
+// Fixture: lock preserves upstream path bytes verbatim
 // ---------------------------------------------------------------------------
 
 #[test]
-fn windows_paths_normalized_in_spine_output() {
+fn backslashes_in_relative_path_are_preserved_verbatim() {
     let jsonl = concat!(
         r#"{"version":"hash.v0","relative_path":"data\\sub\\file.csv","bytes_hash":"sha256:1234","size":10,"tool_versions":{"hash":"0.1.0"}}"#,
         "\n",
@@ -411,8 +411,8 @@ fn windows_paths_normalized_in_spine_output() {
     let result = run_spine(jsonl, None, None, None);
 
     assert_eq!(
-        result.parsed["members"][0]["path"], "data/sub/file.csv",
-        "backslash paths must be normalized to forward slash"
+        result.parsed["members"][0]["path"], r"data\sub\file.csv",
+        "lock should preserve upstream relative_path bytes verbatim"
     );
 }
 
