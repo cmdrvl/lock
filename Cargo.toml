@@ -15,3 +15,4 @@ sha2 = "0.10"
 [dev-dependencies]
 jsonschema = "0.42"
 tempfile = "3"
+spine-rules = { git = "https://github.com/cmdrvl/spine-rules" }
