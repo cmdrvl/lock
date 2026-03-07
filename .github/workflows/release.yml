@@ -254,6 +254,20 @@ jobs:
             git push origin "${tag}"
           fi
 
+      - name: Write release notes preamble
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > artifacts/release-notes.md <<'EOF'
+          This release packages `${{ needs.preflight.outputs.release_tag }}` for all supported targets.
+
+          ## Verification
+
+          ```bash
+          sha256sum -c SHA256SUMS
+          ```
+          EOF
+
       - name: Create or update GitHub release with artifacts
         env:
           GH_TOKEN: ${{ github.token }}
@@ -267,9 +281,10 @@ jobs:
             gh release upload "${tag}" artifacts/* --clobber
           else
             gh release create "${tag}" artifacts/* \
+              --generate-notes \
+              --notes-file artifacts/release-notes.md \
               --verify-tag \
-              --title "lock ${tag}" \
-              --notes "Release ${tag}"
+              --title "lock ${tag}"
           fi
 
   homebrew:
