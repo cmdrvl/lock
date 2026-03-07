@@ -285,7 +285,7 @@ jobs:
           set -euo pipefail
           version="${{ needs.preflight.outputs.release_version }}"
           tag="${{ needs.preflight.outputs.release_tag }}"
-          gh release download "${tag}" --pattern "SHA256SUMS" --dir .
+          gh release download "${tag}" --repo "${{ github.repository }}" --pattern "SHA256SUMS" --dir .
           cat SHA256SUMS
 
       - name: Generate Homebrew formula
