@@ -468,7 +468,6 @@ lock's witness record follows the standard `witness.v0` schema:
   "outcome": "LOCK_CREATED",
   "exit_code": 0,
   "output_hash": "blake3:...",
-  "prev": "blake3:...",
   "ts": "2026-02-24T10:00:00Z"
 }
 ```
@@ -1289,7 +1288,6 @@ Member paths that resolve to symlinks are followed. `lock verify` hashes the tar
   "outcome": "VERIFY_OK",
   "exit_code": 0,
   "output_hash": "blake3:...",
-  "prev": "blake3:...",
   "ts": "2026-02-24T10:00:00Z"
 }
 ```

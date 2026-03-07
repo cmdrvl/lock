@@ -15,7 +15,6 @@
     "outcome",
     "exit_code",
     "output_hash",
-    "prev",
     "ts"
   ],
   "properties": {
@@ -143,17 +142,6 @@
     "output_hash": {
       "type": "string",
       "pattern": "^blake3:[0-9a-f]{64}$"
-    },
-    "prev": {
-      "oneOf": [
-        {
-          "type": "null"
-        },
-        {
-          "type": "string",
-          "pattern": "^blake3:[0-9a-f]{64}$"
-        }
-      ]
     },
     "ts": {
       "type": "string",

@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::io::{self, BufRead, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
@@ -59,8 +59,6 @@ pub struct WitnessRecord {
     pub inputs: Option<Vec<Value>>,
     #[serde(default)]
     pub params: Option<Value>,
-    #[serde(default)]
-    pub prev: Option<String>,
     #[serde(default)]
     pub binary_hash: Option<String>,
     /// Capture any additional fields.
@@ -225,16 +223,13 @@ fn append_witness_record_to(
         fs::create_dir_all(parent)?;
     }
 
-    // Open and lock ledger first to avoid TOCTOU races between read(last-id) and append.
+    // Open and lock the ledger so each record is written as a single append step.
     let mut file = fs::OpenOptions::new()
         .create(true)
         .read(true)
         .append(true)
         .open(ledger_path)?;
     file.lock_exclusive()?;
-
-    // Read previous record's id for chain linking.
-    let prev = read_last_record_id(&mut file);
 
     // Compute output_hash (BLAKE3 of stdout bytes).
     let output_hash = format!("blake3:{}", blake3::hash(output_bytes).to_hex());
@@ -252,7 +247,6 @@ fn append_witness_record_to(
         "outcome": outcome,
         "exit_code": exit_code,
         "output_hash": output_hash,
-        "prev": prev,
         "ts": ts,
     });
 
@@ -265,58 +259,10 @@ fn append_witness_record_to(
     let line = serde_json::to_string(&record).map_err(io::Error::other)?;
 
     // Append to ledger.
-    file.seek(SeekFrom::End(0))?;
     writeln!(file, "{line}")?;
     file.unlock()?;
 
     Ok(())
-}
-
-/// Read the `id` field of the last record in the ledger for chain linking.
-fn read_last_record_id(file: &mut fs::File) -> Option<String> {
-    let last_line = read_last_non_empty_line(file).ok()??;
-    let record: Value = serde_json::from_str(&last_line).ok()?;
-    record.get("id")?.as_str().map(str::to_owned)
-}
-
-fn read_last_non_empty_line(file: &mut fs::File) -> io::Result<Option<String>> {
-    let mut cursor = file.seek(SeekFrom::End(0))?;
-    if cursor == 0 {
-        return Ok(None);
-    }
-
-    let mut line_bytes = Vec::new();
-    let mut byte = [0_u8; 1];
-    let mut saw_non_newline = false;
-
-    while cursor > 0 {
-        cursor -= 1;
-        file.seek(SeekFrom::Start(cursor))?;
-        file.read_exact(&mut byte)?;
-
-        if byte[0] == b'\n' {
-            if saw_non_newline {
-                break;
-            }
-            continue;
-        }
-
-        saw_non_newline = true;
-        line_bytes.push(byte[0]);
-    }
-
-    if line_bytes.is_empty() {
-        return Ok(None);
-    }
-
-    line_bytes.reverse();
-    let line = String::from_utf8(line_bytes).map_err(io::Error::other)?;
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(trimmed.to_owned()))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,7 +426,6 @@ mod tests {
             output_hash: None,
             inputs: None,
             params: None,
-            prev: None,
             binary_hash: None,
             extra: serde_json::Map::new(),
         }
@@ -791,13 +736,12 @@ not json
                 .unwrap()
                 .starts_with("blake3:")
         );
-        assert!(record["prev"].is_null());
         assert_eq!(record["inputs"][0]["path"], "stdin");
         assert_eq!(record["params"]["dataset_id"], "test-ds");
     }
 
     #[test]
-    fn append_chains_prev_to_last_record_id() {
+    fn append_is_additive() {
         let dir = tempfile::tempdir().unwrap();
         let ledger_path = dir.path().join("witness.jsonl");
 
@@ -827,42 +771,10 @@ not json
         let first: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
 
-        assert_eq!(second["prev"], first["id"]);
+        assert_eq!(first["outcome"], "LOCK_CREATED");
         assert_eq!(second["outcome"], "LOCK_PARTIAL");
         assert_eq!(second["exit_code"], 1);
-    }
-
-    #[test]
-    fn append_uses_last_non_empty_line_for_prev() {
-        let dir = tempfile::tempdir().unwrap();
-        let ledger_path = dir.path().join("witness.jsonl");
-        std::fs::write(
-            &ledger_path,
-            concat!(
-                r#"{"id":"blake3:first","tool":"lock","version":"0.1.0","outcome":"LOCK_CREATED","exit_code":0,"output_hash":"blake3:a","ts":"2026-01-01T00:00:00Z"}"#,
-                "\n\n"
-            ),
-        )
-        .unwrap();
-
-        append_witness_record_to(
-            "LOCK_PARTIAL",
-            1,
-            b"second",
-            default_params(),
-            default_inputs(),
-            &ledger_path,
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(&ledger_path).unwrap();
-        let lines: Vec<&str> = content
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .collect();
-        assert_eq!(lines.len(), 2);
-        let second: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
-        assert_eq!(second["prev"], "blake3:first");
+        assert_ne!(second["id"], first["id"]);
     }
 
     #[test]

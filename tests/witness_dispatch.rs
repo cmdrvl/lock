@@ -30,7 +30,6 @@ fn make_ledger_record(tool: &str, outcome: &str, ts: &str) -> String {
         "output_hash": "blake3:0000",
         "inputs": [{ "path": "stdin", "hash": null, "bytes": null }],
         "params": { "dataset_id": null, "as_of": null, "note": null },
-        "prev": null,
     })
     .to_string()
 }
@@ -46,7 +45,6 @@ fn make_record_with_input_hash(tool: &str, ts: &str, hash: &str) -> String {
         "output_hash": "blake3:0000",
         "inputs": [{ "path": "data.jsonl", "hash": hash, "bytes": 1024 }],
         "params": {},
-        "prev": null,
     })
     .to_string()
 }
@@ -318,7 +316,6 @@ fn witness_record_deserializes_with_missing_optional_fields() {
     assert!(record.output_hash.is_none());
     assert!(record.inputs.is_none());
     assert!(record.params.is_none());
-    assert!(record.prev.is_none());
     assert!(record.binary_hash.is_none());
 }
 
