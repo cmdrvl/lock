@@ -1,7 +1,7 @@
 {
   "schema_version": "operator.v0",
   "name": "lock",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Dataset lockfile tool: pins artifacts, fingerprints, and tool versions into a self-hashed immutable JSON artifact",
   "repository": "https://github.com/cmdrvl/lock",
   "license": "MIT",
@@ -25,7 +25,7 @@
       "type": "file_path",
       "required": false,
       "position": 0,
-      "description": "JSONL manifest file (default: stdin)"
+      "description": "Versioned JSONL manifest file from upstream tools (default: stdin)"
     }
   ],
 
@@ -218,7 +218,9 @@
     {
       "code": "E_BAD_INPUT",
       "message": "Invalid JSONL or unknown record version",
-      "action": "escalate"
+      "action": "rerun_pipeline_or_pack_seal",
+      "input_mode": "pipeline_only",
+      "standalone_alternative": "pack seal"
     },
     {
       "code": "E_MISSING_HASH",
@@ -242,6 +244,10 @@
   },
 
   "pipeline": {
+    "mode": "pipeline_only",
+    "input": "versioned JSONL records from upstream tools",
+    "example_pipeline": "vacuum <path> | hashbytes | lock --dataset-id \"<dataset>\" > dataset.lock.json",
+    "standalone_alternative": "pack seal",
     "upstream": [
       "vacuum",
       "hash",

@@ -100,6 +100,8 @@ vacuum  →  hashbytes  →  fingerprint  →  lock  →  pack
 
 Each tool in the pipeline reads JSONL from stdin and emits enriched JSONL to stdout. `lock` consumes the stream and produces a single JSON lockfile.
 
+`lock` is pipeline-only. If you want to seal a standalone artifact or an existing lockfile directly, use `pack seal` instead of passing bare file paths to `lock`.
+
 ---
 
 ## What lock Is Not
@@ -111,6 +113,7 @@ Each tool in the pipeline reads JSONL from stdin and emits enriched JSONL to std
 | Enumerate files in a directory | [`vacuum`](https://github.com/cmdrvl/vacuum) |
 | Compute SHA256/BLAKE3 hashes | [`hash`](https://github.com/cmdrvl/hash) |
 | Match files against template definitions | [`fingerprint`](https://github.com/cmdrvl/fingerprint) |
+| Seal a standalone artifact or lockfile | [`pack seal`](https://github.com/cmdrvl/pack) |
 | Check structural comparability of CSVs | [`shape`](https://github.com/cmdrvl/shape) |
 | Explain numeric changes between CSVs | [`rvl`](https://github.com/cmdrvl/rvl) |
 | Bundle into immutable evidence packs | [`pack`](https://github.com/cmdrvl/pack) |
@@ -141,7 +144,7 @@ No lockfile created. Input was invalid or insufficient.
   "outcome": "REFUSAL",
   "refusal": {
     "code": "E_MISSING_HASH",
-    "message": "3 records lack bytes_hash - run hash first",
+    "message": "3 records lack bytes_hash - run hashbytes first",
     "detail": {
       "count": 3,
       "sample_paths": ["data/model.xlsx", "data/tape.csv", "data/readme.pdf"]
@@ -282,8 +285,8 @@ If a non-skipped record lacks `bytes_hash`, `lock` refuses with `E_MISSING_HASH`
 | Code | Trigger | Next Step |
 |------|---------|-----------|
 | `E_EMPTY` | No input records | Provide artifacts (run upstream pipeline) |
-| `E_BAD_INPUT` | Malformed JSONL or unknown record version | Fix upstream output |
-| `E_MISSING_HASH` | Non-skipped records missing `bytes_hash` | Run `hash` before `lock` |
+| `E_BAD_INPUT` | Malformed JSONL or unknown record version | Re-run the upstream JSONL pipeline, or use `pack seal` for standalone sealing |
+| `E_MISSING_HASH` | Non-skipped records missing `bytes_hash` | Run `hashbytes` before `lock` |
 
 Every refusal includes the error code, detail, and a concrete `next_command`.
 
@@ -291,9 +294,9 @@ Every refusal includes the error code, detail, and a concrete `next_command`.
 
 ## Troubleshooting
 
-### "E_MISSING_HASH" — forgot to run hash
+### "E_MISSING_HASH" — forgot to run hashbytes
 
-The most common error. `lock` requires every non-skipped record to have a `bytes_hash`. You probably piped `vacuum` directly to `lock` without `hash` in between:
+The most common error. `lock` requires every non-skipped record to have a `bytes_hash`. You probably piped `vacuum` directly to `lock` without `hashbytes` in between:
 
 ```bash
 # Wrong:
@@ -305,7 +308,19 @@ vacuum /data | hashbytes | lock --dataset-id "nightly"
 
 ### "E_BAD_INPUT" — unknown record version
 
-Your upstream tool emitted records with a version `lock` doesn't recognize. Check that all pipeline tools are on compatible versions:
+`lock` only accepts versioned JSONL records from `vacuum`, `hashbytes`, or `fingerprint`. If you passed a raw file path or a non-JSON manifest, switch back to the stream pipeline:
+
+```bash
+vacuum /data | hashbytes | lock --dataset-id "nightly" > nightly.lock.json
+```
+
+If you were trying to seal an artifact or an existing lockfile directly, use `pack seal` instead:
+
+```bash
+pack seal nightly.lock.json --output evidence/nightly/
+```
+
+If the input was versioned JSONL but still refused, check that all pipeline tools are on compatible versions:
 
 ```bash
 vacuum --version
@@ -351,8 +366,12 @@ $ lock --describe | jq '.exit_codes'
 
 $ lock --describe | jq '.pipeline'
 {
+  "mode": "pipeline_only",
+  "input": "versioned JSONL records from upstream tools",
+  "example_pipeline": "vacuum <path> | hashbytes | lock --dataset-id \"<dataset>\" > dataset.lock.json",
+  "standalone_alternative": "pack seal",
   "upstream": ["vacuum", "hash", "fingerprint"],
-  "downstream": ["pack", "shape", "rvl"]
+  "downstream": ["pack"]
 }
 ```
 

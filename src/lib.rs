@@ -326,6 +326,35 @@ mod tests {
     }
 
     #[test]
+    fn run_lock_invalid_raw_input_writes_actionable_refusal() {
+        let input_dir = tempfile::tempdir().expect("create temp dir");
+        let input_path = input_dir.path().join("artifact.pdf");
+        fs::write(&input_path, "not jsonl").expect("write raw artifact");
+
+        let output_dir = tempfile::tempdir().expect("create temp dir");
+        let output_path = output_dir.path().join("refusal.json");
+
+        let mut cli = make_file_cli(input_path, true);
+        cli.output = Some(output_path.clone());
+
+        let code = run_lock(&cli);
+
+        assert_eq!(code, 2);
+        let refusal_json = fs::read_to_string(output_path).expect("read refusal output");
+        let parsed: serde_json::Value = serde_json::from_str(&refusal_json).expect("valid JSON");
+        assert_eq!(parsed["outcome"], "REFUSAL");
+        assert_eq!(parsed["refusal"]["code"], "E_BAD_INPUT");
+        assert_eq!(
+            parsed["refusal"]["detail"]["standalone_alternative"],
+            "pack seal <artifact-or-lockfile> --output <evidence-dir>"
+        );
+        assert_eq!(
+            parsed["refusal"]["next_command"],
+            r#"vacuum <path> | hashbytes | lock --dataset-id "<dataset>" > dataset.lock.json"#
+        );
+    }
+
+    #[test]
     fn run_lock_appends_witness_for_lock_created_by_default() {
         let input_jsonl = concat!(
             r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaa","size":1,"tool_versions":{"hash":"0.1.0"}}"#,

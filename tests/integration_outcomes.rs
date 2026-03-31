@@ -255,7 +255,10 @@ fn refusal_envelope_e_empty() {
             .contains("no input")
     );
     assert!(parsed["refusal"]["detail"].as_object().unwrap().is_empty());
-    assert!(parsed["refusal"]["next_command"].is_string());
+    assert_eq!(
+        parsed["refusal"]["next_command"],
+        r#"vacuum <path> | hashbytes | lock --dataset-id "<dataset>" > dataset.lock.json"#
+    );
 }
 
 #[test]
@@ -269,7 +272,18 @@ fn refusal_envelope_e_bad_input_parse() {
     assert_eq!(parsed["refusal"]["code"], "E_BAD_INPUT");
     assert_eq!(parsed["refusal"]["detail"]["line"], 7);
     assert_eq!(parsed["refusal"]["detail"]["error"], "unexpected token");
-    assert!(parsed["refusal"]["next_command"].is_null());
+    assert_eq!(
+        parsed["refusal"]["detail"]["expected_input"],
+        "versioned JSONL records from vacuum.v0, hash.v0, or fingerprint.v0"
+    );
+    assert_eq!(
+        parsed["refusal"]["detail"]["standalone_alternative"],
+        "pack seal <artifact-or-lockfile> --output <evidence-dir>"
+    );
+    assert_eq!(
+        parsed["refusal"]["next_command"],
+        r#"vacuum <path> | hashbytes | lock --dataset-id "<dataset>" > dataset.lock.json"#
+    );
 }
 
 #[test]
@@ -286,6 +300,18 @@ fn refusal_envelope_e_bad_input_version() {
             .as_str()
             .unwrap()
             .contains("pack.v0")
+    );
+    assert_eq!(
+        parsed["refusal"]["detail"]["expected_versions"],
+        json!(["vacuum.v0", "hash.v0", "fingerprint.v0"])
+    );
+    assert_eq!(
+        parsed["refusal"]["detail"]["standalone_alternative"],
+        "pack seal <artifact-or-lockfile> --output <evidence-dir>"
+    );
+    assert_eq!(
+        parsed["refusal"]["next_command"],
+        r#"vacuum <path> | hashbytes | lock --dataset-id "<dataset>" > dataset.lock.json"#
     );
 }
 
@@ -304,7 +330,10 @@ fn refusal_envelope_e_missing_hash() {
         .as_array()
         .expect("sample_paths must be array");
     assert_eq!(sample.len(), 3);
-    assert!(parsed["refusal"]["next_command"].is_string());
+    assert_eq!(
+        parsed["refusal"]["next_command"],
+        r#"vacuum <path> | hashbytes | lock --dataset-id "<dataset>" > dataset.lock.json"#
+    );
 }
 
 #[test]

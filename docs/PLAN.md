@@ -215,8 +215,8 @@ Records missing `bytes_hash` (without `_skipped: true`) trigger a refusal (`E_MI
 | Code | Trigger | Next step |
 |------|---------|-----------|
 | `E_EMPTY` | No input records (stdin was empty or file is empty) | Provide artifacts — run `vacuum` first |
-| `E_BAD_INPUT` | Invalid JSONL (parse error) or unknown record version | Check upstream tool output |
-| `E_MISSING_HASH` | One or more non-skipped records lack `bytes_hash` | Run `hash` first |
+| `E_BAD_INPUT` | Invalid JSONL (parse error) or unknown record version | Re-run the upstream JSONL pipeline, or use `pack seal` for standalone sealing |
+| `E_MISSING_HASH` | One or more non-skipped records lack `bytes_hash` | Run `hashbytes` first |
 
 ### Refusal JSON envelope
 
@@ -226,7 +226,7 @@ Records missing `bytes_hash` (without `_skipped: true`) trigger a refusal (`E_MI
   "outcome": "REFUSAL",
   "refusal": {
     "code": "E_MISSING_HASH",
-    "message": "3 records lack bytes_hash — run hash first",
+    "message": "3 records lack bytes_hash — run hashbytes first",
     "detail": {
       "count": 3,
       "sample_paths": ["data/model.xlsx", "data/tape.csv", "data/readme.pdf"]
@@ -245,10 +245,20 @@ E_EMPTY:
   { }
 
 E_BAD_INPUT (parse error):
-  { "line": 42, "error": "expected value at line 1 column 1" }
+  {
+    "line": 42,
+    "error": "expected value at line 1 column 1",
+    "expected_input": "versioned JSONL records from vacuum.v0, hash.v0, or fingerprint.v0",
+    "standalone_alternative": "pack seal <artifact-or-lockfile> --output <evidence-dir>"
+  }
 
 E_BAD_INPUT (unknown version):
-  { "line": 3, "version": "hash.v2" }
+  {
+    "line": 3,
+    "version": "hash.v2",
+    "expected_versions": ["vacuum.v0", "hash.v0", "fingerprint.v0"],
+    "standalone_alternative": "pack seal <artifact-or-lockfile> --output <evidence-dir>"
+  }
 
 E_MISSING_HASH:
   { "count": 3, "sample_paths": ["data/model.xlsx", "data/tape.csv", "data/readme.pdf"] }
@@ -702,7 +712,7 @@ The versions travel through the pipeline on every record — lock doesn't need t
   },
 
   "arguments": [
-    { "name": "input", "type": "file_path", "required": false, "position": 0, "description": "JSONL manifest file (default: stdin)" }
+    { "name": "input", "type": "file_path", "required": false, "position": 0, "description": "Versioned JSONL manifest file from upstream tools (default: stdin)" }
   ],
 
   "options": [
@@ -719,7 +729,7 @@ The versions travel through the pipeline on every record — lock doesn't need t
 
   "refusals": [
     { "code": "E_EMPTY", "message": "No input records", "action": "run_upstream", "tool": "vacuum" },
-    { "code": "E_BAD_INPUT", "message": "Invalid JSONL or unknown record version", "action": "escalate" },
+    { "code": "E_BAD_INPUT", "message": "Invalid JSONL or unknown record version", "action": "rerun_pipeline_or_pack_seal", "input_mode": "pipeline_only", "standalone_alternative": "pack seal" },
     { "code": "E_MISSING_HASH", "message": "Records lack bytes_hash", "action": "run_upstream", "tool": "hash" }
   ],
 
@@ -730,7 +740,11 @@ The versions travel through the pipeline on every record — lock doesn't need t
   },
 
   "pipeline": {
-    "upstream": ["hash", "fingerprint"],
+    "mode": "pipeline_only",
+    "input": "versioned JSONL records from upstream tools",
+    "example_pipeline": "vacuum <path> | hashbytes | lock --dataset-id \"<dataset>\" > dataset.lock.json",
+    "standalone_alternative": "pack seal",
+    "upstream": ["vacuum", "hash", "fingerprint"],
     "downstream": ["pack"]
   }
 }

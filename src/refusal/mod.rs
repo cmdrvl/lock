@@ -6,6 +6,9 @@ pub const LOCK_VERSION: &str = "lock.v0";
 
 /// Maximum sample paths included in `E_MISSING_HASH` detail.
 const MAX_SAMPLE_PATHS: usize = 5;
+const PIPELINE_NEXT_COMMAND: &str =
+    r#"vacuum <path> | hashbytes | lock --dataset-id "<dataset>" > dataset.lock.json"#;
+const PACK_SEAL_NEXT_COMMAND: &str = r#"pack seal <artifact-or-lockfile> --output <evidence-dir>"#;
 
 /// Refusal codes defined by the lock spec.
 ///
@@ -106,7 +109,7 @@ pub fn empty() -> RefusalEnvelope {
             code: RefusalCode::Empty,
             message: "no input records — run vacuum first".to_string(),
             detail: serde_json::json!({}),
-            next_command: Some("vacuum <path> | hash | lock".to_string()),
+            next_command: Some(PIPELINE_NEXT_COMMAND.to_string()),
         },
     }
 }
@@ -118,12 +121,16 @@ pub fn bad_input_parse(line: usize, error: &str) -> RefusalEnvelope {
         outcome: "REFUSAL".to_string(),
         refusal: Refusal {
             code: RefusalCode::BadInput,
-            message: format!("invalid JSONL at line {line} — check upstream tool output"),
+            message: format!(
+                "invalid JSONL at line {line} — lock expects versioned JSONL from upstream tools"
+            ),
             detail: serde_json::json!({
                 "line": line,
                 "error": error,
+                "expected_input": "versioned JSONL records from vacuum.v0, hash.v0, or fingerprint.v0",
+                "standalone_alternative": PACK_SEAL_NEXT_COMMAND,
             }),
-            next_command: None,
+            next_command: Some(PIPELINE_NEXT_COMMAND.to_string()),
         },
     }
 }
@@ -136,13 +143,15 @@ pub fn bad_input_version(line: usize, version: &str) -> RefusalEnvelope {
         refusal: Refusal {
             code: RefusalCode::BadInput,
             message: format!(
-                "unknown record version \"{version}\" at line {line} — check upstream tool output"
+                "unknown record version \"{version}\" at line {line} — lock expects vacuum.v0, hash.v0, or fingerprint.v0 records"
             ),
             detail: serde_json::json!({
                 "line": line,
                 "version": version,
+                "expected_versions": ["vacuum.v0", "hash.v0", "fingerprint.v0"],
+                "standalone_alternative": PACK_SEAL_NEXT_COMMAND,
             }),
-            next_command: None,
+            next_command: Some(PIPELINE_NEXT_COMMAND.to_string()),
         },
     }
 }
@@ -163,12 +172,12 @@ pub fn missing_hash(count: usize, all_paths: Vec<String>) -> RefusalEnvelope {
         outcome: "REFUSAL".to_string(),
         refusal: Refusal {
             code: RefusalCode::MissingHash,
-            message: format!("{count} {noun} bytes_hash — run hash first"),
+            message: format!("{count} {noun} bytes_hash — run hashbytes first"),
             detail: serde_json::json!({
                 "count": count,
                 "sample_paths": sample_paths,
             }),
-            next_command: Some("vacuum <path> | hash | lock".to_string()),
+            next_command: Some(PIPELINE_NEXT_COMMAND.to_string()),
         },
     }
 }
@@ -198,7 +207,18 @@ mod tests {
             env.refusal.detail["error"],
             "expected value at line 1 column 1"
         );
-        assert!(env.refusal.next_command.is_none());
+        assert_eq!(
+            env.refusal.detail["expected_input"],
+            "versioned JSONL records from vacuum.v0, hash.v0, or fingerprint.v0"
+        );
+        assert_eq!(
+            env.refusal.detail["standalone_alternative"],
+            PACK_SEAL_NEXT_COMMAND
+        );
+        assert_eq!(
+            env.refusal.next_command.as_deref(),
+            Some(PIPELINE_NEXT_COMMAND)
+        );
     }
 
     #[test]
@@ -207,7 +227,18 @@ mod tests {
         assert_eq!(env.refusal.code, RefusalCode::BadInput);
         assert_eq!(env.refusal.detail["line"], 3);
         assert_eq!(env.refusal.detail["version"], "hash.v2");
-        assert!(env.refusal.next_command.is_none());
+        assert_eq!(
+            env.refusal.detail["expected_versions"],
+            serde_json::json!(["vacuum.v0", "hash.v0", "fingerprint.v0"])
+        );
+        assert_eq!(
+            env.refusal.detail["standalone_alternative"],
+            PACK_SEAL_NEXT_COMMAND
+        );
+        assert_eq!(
+            env.refusal.next_command.as_deref(),
+            Some(PIPELINE_NEXT_COMMAND)
+        );
     }
 
     #[test]
@@ -283,11 +314,11 @@ mod tests {
     }
 
     #[test]
-    fn null_next_command_serializes_as_null() {
+    fn bad_input_next_command_serializes_as_string() {
         let env = bad_input_parse(1, "bad json");
         let json = env.to_json();
         let parsed: Value = serde_json::from_str(&json).unwrap();
-        assert!(parsed["refusal"]["next_command"].is_null());
+        assert_eq!(parsed["refusal"]["next_command"], PIPELINE_NEXT_COMMAND);
     }
 
     #[test]
@@ -362,6 +393,9 @@ mod tests {
             .unwrap()
             .keys()
             .collect();
-        assert_eq!(det_keys, &["error", "line"]);
+        assert_eq!(
+            det_keys,
+            &["error", "expected_input", "line", "standalone_alternative"]
+        );
     }
 }

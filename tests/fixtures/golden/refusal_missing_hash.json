@@ -3,7 +3,7 @@
   "outcome": "REFUSAL",
   "refusal": {
     "code": "E_MISSING_HASH",
-    "message": "2 records lack bytes_hash — run hash first",
+    "message": "2 records lack bytes_hash — run hashbytes first",
     "detail": {
       "count": 2,
       "sample_paths": [
@@ -11,6 +11,6 @@
         "b.csv"
       ]
     },
-    "next_command": "vacuum <path> | hash | lock"
+    "next_command": "vacuum <path> | hashbytes | lock --dataset-id \"<dataset>\" > dataset.lock.json"
   }
 }
