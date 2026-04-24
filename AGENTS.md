@@ -156,7 +156,6 @@ cargo test
 ## Git and Release
 
 - **Primary branch:** `main`
-- **`master`** exists for legacy URL compatibility — keep synced: `git push origin main:master`
 - Bump `Cargo.toml` semver appropriately on release
 - Sync `Cargo.lock` before release workflows that use `--locked`
 
@@ -216,5 +215,5 @@ Before ending a session:
 1. Run quality gate (`fmt` + `clippy` + `test`)
 2. Confirm docs/spec alignment for behavior changes
 3. Commit with precise message
-4. Push `main` and sync `master`
+4. Push `main`
 5. Summarize: what changed, what was validated, remaining risks
