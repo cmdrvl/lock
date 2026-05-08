@@ -51,6 +51,35 @@ pub enum Command {
         #[command(subcommand)]
         action: WitnessAction,
     },
+    /// Run read-only diagnostics for agents and operators
+    Doctor {
+        /// Emit machine-readable triage JSON for agents
+        #[arg(long = "robot-triage")]
+        robot_triage: bool,
+        /// Output health as JSON when no doctor subcommand is provided
+        #[arg(long)]
+        json: bool,
+        #[command(subcommand)]
+        action: Option<DoctorAction>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DoctorAction {
+    /// Run read-only health checks
+    Health {
+        /// Output JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Describe supported doctor capabilities
+    Capabilities {
+        /// Output JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print agent-oriented doctor documentation
+    RobotDocs,
 }
 
 /// Arguments for the `lock verify` subcommand.
@@ -155,6 +184,11 @@ pub fn run() -> u8 {
     match &cli.command {
         Some(Command::Verify(args)) => return dispatch_verify(args),
         Some(Command::Witness { action }) => return dispatch_witness(action),
+        Some(Command::Doctor {
+            robot_triage,
+            json,
+            action,
+        }) => return crate::doctor::dispatch(*robot_triage, *json, action.as_ref()),
         None => {}
     }
 
@@ -282,35 +316,51 @@ mod tests {
             "--json",
         ])
         .unwrap();
-        match &cli.command {
-            Some(Command::Witness {
-                action:
-                    WitnessAction::Query {
-                        filters,
-                        limit,
-                        json,
-                    },
-            }) => {
-                assert_eq!(filters.tool.as_deref(), Some("lock"));
-                assert_eq!(filters.since.as_deref(), Some("2026-01-01T00:00:00Z"));
-                assert_eq!(filters.outcome.as_deref(), Some("LOCK_CREATED"));
-                assert_eq!(*limit, 10);
-                assert!(*json);
-            }
-            other => panic!("expected Witness/Query, got {other:?}"),
+        assert!(
+            matches!(
+                &cli.command,
+                Some(Command::Witness {
+                    action: WitnessAction::Query { .. },
+                })
+            ),
+            "expected Witness/Query, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Witness {
+            action:
+                WitnessAction::Query {
+                    filters,
+                    limit,
+                    json,
+                },
+        }) = &cli.command
+        {
+            assert_eq!(filters.tool.as_deref(), Some("lock"));
+            assert_eq!(filters.since.as_deref(), Some("2026-01-01T00:00:00Z"));
+            assert_eq!(filters.outcome.as_deref(), Some("LOCK_CREATED"));
+            assert_eq!(*limit, 10);
+            assert!(*json);
         }
     }
 
     #[test]
     fn parse_witness_last() {
         let cli = Cli::try_parse_from(["lock", "witness", "last", "--json"]).unwrap();
-        match &cli.command {
-            Some(Command::Witness {
-                action: WitnessAction::Last { json },
-            }) => {
-                assert!(*json);
-            }
-            other => panic!("expected Witness/Last, got {other:?}"),
+        assert!(
+            matches!(
+                &cli.command,
+                Some(Command::Witness {
+                    action: WitnessAction::Last { .. },
+                })
+            ),
+            "expected Witness/Last, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Witness {
+            action: WitnessAction::Last { json },
+        }) = &cli.command
+        {
+            assert!(*json);
         }
     }
 
@@ -327,15 +377,23 @@ mod tests {
             "--json",
         ])
         .unwrap();
-        match &cli.command {
-            Some(Command::Witness {
-                action: WitnessAction::Count { filters, json },
-            }) => {
-                assert_eq!(filters.tool.as_deref(), Some("hash"));
-                assert_eq!(filters.input_hash.as_deref(), Some("a1b2c3"));
-                assert!(*json);
-            }
-            other => panic!("expected Witness/Count, got {other:?}"),
+        assert!(
+            matches!(
+                &cli.command,
+                Some(Command::Witness {
+                    action: WitnessAction::Count { .. },
+                })
+            ),
+            "expected Witness/Count, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Witness {
+            action: WitnessAction::Count { filters, json },
+        }) = &cli.command
+        {
+            assert_eq!(filters.tool.as_deref(), Some("hash"));
+            assert_eq!(filters.input_hash.as_deref(), Some("a1b2c3"));
+            assert!(*json);
         }
     }
 
@@ -349,28 +407,38 @@ mod tests {
             "2026-02-01T00:00:00Z",
         ])
         .unwrap();
-        match &cli.command {
-            Some(Command::Witness {
-                action: WitnessAction::Query { filters, .. },
-            }) => {
-                assert_eq!(filters.until.as_deref(), Some("2026-02-01T00:00:00Z"));
-            }
-            other => panic!("expected Witness/Query, got {other:?}"),
+        assert!(
+            matches!(
+                &cli.command,
+                Some(Command::Witness {
+                    action: WitnessAction::Query { .. },
+                })
+            ),
+            "expected Witness/Query, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Witness {
+            action: WitnessAction::Query { filters, .. },
+        }) = &cli.command
+        {
+            assert_eq!(filters.until.as_deref(), Some("2026-02-01T00:00:00Z"));
         }
     }
 
     #[test]
     fn parse_verify_lockfile_only() {
         let cli = Cli::try_parse_from(["lock", "verify", "dec.lock.json"]).unwrap();
-        match &cli.command {
-            Some(Command::Verify(args)) => {
-                assert_eq!(args.lockfile, PathBuf::from("dec.lock.json"));
-                assert!(args.root.is_none());
-                assert!(!args.json);
-                assert!(!args.no_witness);
-                assert!(!args.strict);
-            }
-            other => panic!("expected Verify, got {other:?}"),
+        assert!(
+            matches!(&cli.command, Some(Command::Verify(_))),
+            "expected Verify, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Verify(args)) = &cli.command {
+            assert_eq!(args.lockfile, PathBuf::from("dec.lock.json"));
+            assert!(args.root.is_none());
+            assert!(!args.json);
+            assert!(!args.no_witness);
+            assert!(!args.strict);
         }
     }
 
@@ -387,15 +455,17 @@ mod tests {
             "--strict",
         ])
         .unwrap();
-        match &cli.command {
-            Some(Command::Verify(args)) => {
-                assert_eq!(args.lockfile, PathBuf::from("dec.lock.json"));
-                assert_eq!(args.root, Some(PathBuf::from("/data/dec")));
-                assert!(args.json);
-                assert!(args.no_witness);
-                assert!(args.strict);
-            }
-            other => panic!("expected Verify, got {other:?}"),
+        assert!(
+            matches!(&cli.command, Some(Command::Verify(_))),
+            "expected Verify, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Verify(args)) = &cli.command {
+            assert_eq!(args.lockfile, PathBuf::from("dec.lock.json"));
+            assert_eq!(args.root, Some(PathBuf::from("/data/dec")));
+            assert!(args.json);
+            assert!(args.no_witness);
+            assert!(args.strict);
         }
     }
 
@@ -409,6 +479,52 @@ mod tests {
     fn parse_verify_unknown_flag_rejected() {
         let result = Cli::try_parse_from(["lock", "verify", "dec.lock.json", "--bogus"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_doctor_health_json() {
+        let cli = Cli::try_parse_from(["lock", "doctor", "health", "--json"]).unwrap();
+        assert!(
+            matches!(
+                &cli.command,
+                Some(Command::Doctor {
+                    action: Some(DoctorAction::Health { .. }),
+                    ..
+                })
+            ),
+            "expected Doctor/Health, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Doctor {
+            robot_triage,
+            json,
+            action: Some(DoctorAction::Health { json: health_json }),
+        }) = &cli.command
+        {
+            assert!(!robot_triage);
+            assert!(!json);
+            assert!(*health_json);
+        }
+    }
+
+    #[test]
+    fn parse_doctor_robot_triage() {
+        let cli = Cli::try_parse_from(["lock", "doctor", "--robot-triage"]).unwrap();
+        assert!(
+            matches!(&cli.command, Some(Command::Doctor { .. })),
+            "expected Doctor robot triage, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Doctor {
+            robot_triage,
+            json,
+            action,
+        }) = &cli.command
+        {
+            assert!(*robot_triage);
+            assert!(!json);
+            assert!(action.is_none());
+        }
     }
 
     #[test]

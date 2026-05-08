@@ -41,6 +41,13 @@ jobs:
       - name: Run test suite
         run: cargo test -- --test-threads=1
 
+      - name: Smoke doctor surface
+        run: |
+          cargo run --locked -- doctor health
+          cargo run --locked -- doctor capabilities --json
+          cargo run --locked -- doctor robot-docs
+          cargo run --locked -- doctor --robot-triage
+
   locked-build:
     name: Locked dependency check
     runs-on: ubuntu-latest
