@@ -1,5 +1,9 @@
 # lock
 
+![lock: pipeline state snapshot, tamper-evident. A painterly dashboard showing four input streams converging into a LOCK action illustrated as a leather portfolio being sealed with a wax stamp. The streams are artifact hashes from hash, tool versions, registry versions, and environment. The output is delivery.lock.json with a content-addressed lock_hash, an identical verify check (green), and a TAMPERED case showing a specific field drift (tool_versions.hash expected 0.9.2 found 0.9.3). A WHAT'S IN THE LOCK cutaway shows seven content-addressed layers. The physical leather portfolio with the wax seal sits on the desk.](docs/images/lock.webp)
+
+> *Six months from now, you can still prove what was there.*
+
 <div align="center">
 
 [![CI](https://github.com/cmdrvl/lock/actions/workflows/ci.yml/badge.svg)](https://github.com/cmdrvl/lock/actions/workflows/ci.yml)
@@ -691,3 +695,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
+
+---
+
+*`lock` is part of the open-source toolchain from the [CMD+RVL](https://cmdrvl.com) lineage and AI enablement practice. MIT-licensed. Contributions welcome from any practice or stack.*
