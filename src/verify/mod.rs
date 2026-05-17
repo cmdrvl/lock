@@ -381,14 +381,14 @@ pub fn run_verify(args: &VerifyArgs) -> u8 {
     };
 
     // Step 2: Validate lockfile JSON.
-    match validate_lockfile_json(&json) {
-        ValidationResult::Ok(_) => {}
+    let lockfile_value = match validate_lockfile_json(&json) {
+        ValidationResult::Ok(value) => value,
         ValidationResult::Refusal(payload) => {
             print!("{payload}");
             emit_witness(args, 2, "REFUSAL", payload.as_bytes());
             return 2;
         }
-    }
+    };
 
     // Step 3: Validate --root exists (if provided).
     if let Some(root) = &args.root
@@ -401,7 +401,7 @@ pub fn run_verify(args: &VerifyArgs) -> u8 {
     }
 
     // Step 4: Level 1 — self-hash verification.
-    let detail = match self_hash::verify_lock_hash_detail(&json) {
+    let detail = match self_hash::verify_lock_hash_detail_value(&lockfile_value) {
         Ok(d) => d,
         Err(e) => {
             // Shouldn't happen (already validated JSON), but handle gracefully.
@@ -424,7 +424,6 @@ pub fn run_verify(args: &VerifyArgs) -> u8 {
         (None, "VERIFY_FAILED", 1u8)
     } else if let Some(root) = &args.root {
         // Level 2: verify members against filesystem.
-        let lockfile_value: Value = serde_json::from_str(&json).expect("already validated");
         let members_result = members::verify_members(&lockfile_value, root);
         let (outcome, exit_code) = members::members_outcome(&members_result, args.strict);
         let members_json =

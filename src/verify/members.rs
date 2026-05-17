@@ -52,14 +52,14 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
     let members = lockfile_json
         .get("members")
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
 
     let mut failures = Vec::new();
     let mut skips = Vec::new();
     let mut verified = 0;
 
-    for member in &members {
+    for member in members {
         let member_path = member.get("path").and_then(Value::as_str).unwrap_or("");
         let expected_hash = member
             .get("bytes_hash")

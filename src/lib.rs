@@ -1,4 +1,4 @@
-#![deny(unsafe_code)]
+#![forbid(unsafe_code)]
 
 use chrono::{SecondsFormat, Utc};
 
@@ -181,13 +181,13 @@ fn current_created_timestamp() -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{env, fs, path::Path, path::PathBuf};
+    use std::{fs, path::Path, path::PathBuf};
 
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::{orchestrate_from_read_result, output, run_lock};
-    use crate::{cli, input};
+    use crate::{cli, input, witness::TestWitnessEnvGuard};
 
     fn make_cli() -> cli::Cli {
         cli::Cli {
@@ -302,7 +302,7 @@ mod tests {
         let out_path = out_dir.path().join("test.lock.json");
         let ledger_dir = tempfile::tempdir().expect("create temp dir");
         let ledger_path = ledger_dir.path().join("witness.jsonl");
-        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", &ledger_path);
+        let _guard = TestWitnessEnvGuard::set(ledger_path.display().to_string());
 
         let mut cli = make_file_cli(input_path, true);
         cli.output = Some(out_path.clone());
@@ -364,7 +364,7 @@ mod tests {
         let (_input_dir, input_path) = write_input_file(input_jsonl);
         let ledger_dir = tempfile::tempdir().expect("create temp dir");
         let ledger_path = ledger_dir.path().join("witness.jsonl");
-        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", &ledger_path);
+        let _guard = TestWitnessEnvGuard::set(ledger_path.display().to_string());
 
         let code = run_lock(&make_file_cli(input_path, false));
 
@@ -389,7 +389,7 @@ mod tests {
         ));
         let ledger_dir = tempfile::tempdir().expect("create temp dir");
         let ledger_path = ledger_dir.path().join("witness.jsonl");
-        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", &ledger_path);
+        let _guard = TestWitnessEnvGuard::set(ledger_path.display().to_string());
 
         let code = run_lock(&make_file_cli(input_path, false));
 
@@ -407,7 +407,7 @@ mod tests {
         ));
         let ledger_dir = tempfile::tempdir().expect("create temp dir");
         let ledger_path = ledger_dir.path().join("witness.jsonl");
-        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", &ledger_path);
+        let _guard = TestWitnessEnvGuard::set(ledger_path.display().to_string());
 
         let code = run_lock(&make_file_cli(input_path, false));
 
@@ -426,7 +426,7 @@ mod tests {
         ));
         let ledger_dir = tempfile::tempdir().expect("create temp dir");
         let ledger_path = ledger_dir.path().join("witness.jsonl");
-        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", &ledger_path);
+        let _guard = TestWitnessEnvGuard::set(ledger_path.display().to_string());
 
         let code = run_lock(&make_file_cli(input_path, true));
 
@@ -440,7 +440,7 @@ mod tests {
             r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaa","size":1}"#,
             "\n"
         ));
-        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", Path::new("/dev/null/witness.jsonl"));
+        let _guard = TestWitnessEnvGuard::set("/dev/null/witness.jsonl");
 
         let code = run_lock(&make_file_cli(input_path, false));
 
@@ -470,41 +470,5 @@ mod tests {
             "expected exactly one witness record"
         );
         serde_json::from_str(line).expect("parse witness record")
-    }
-
-    #[allow(unsafe_code)]
-    struct EnvGuard {
-        key: String,
-        original: Option<String>,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    #[allow(unsafe_code)]
-    impl EnvGuard {
-        fn set(key: &str, value: &Path) -> Self {
-            let lock = crate::witness::TEST_ENV_LOCK
-                .lock()
-                .expect("lock env mutex");
-            let original = env::var(key).ok();
-            // SAFETY: Test-only env mutation guarded by global test mutex.
-            unsafe { env::set_var(key, value) };
-            Self {
-                key: key.to_owned(),
-                original,
-                _lock: lock,
-            }
-        }
-    }
-
-    #[allow(unsafe_code)]
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                // SAFETY: Test-only env restoration guarded by global test mutex.
-                Some(value) => unsafe { env::set_var(&self.key, value) },
-                // SAFETY: Test-only env restoration guarded by global test mutex.
-                None => unsafe { env::remove_var(&self.key) },
-            }
-        }
     }
 }

@@ -1,7 +1,5 @@
-use std::collections::BTreeMap;
-
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use super::Lockfile;
@@ -14,11 +12,9 @@ use super::Lockfile;
 /// 3. SHA256 the canonical byte sequence.
 /// 4. Return `"sha256:<hex>"`.
 pub fn compute_lock_hash(lockfile: &Lockfile) -> String {
-    let mut pre_hash = lockfile.clone();
-    pre_hash.lock_hash = String::new();
-
-    let canonical =
-        to_canonical_json(&pre_hash).expect("Lockfile should always be serializable to JSON");
+    let value = serde_json::to_value(lockfile).expect("Lockfile should always serialize to JSON");
+    let canonical = canonical_json_with_top_level_lock_hash(&value, "")
+        .expect("Lockfile should always be serializable to JSON");
 
     let digest = Sha256::digest(canonical.as_bytes());
     format!("sha256:{:x}", digest)
@@ -48,8 +44,12 @@ pub struct LockHashDetail {
 /// and compares to the stored value. Returns the stored hash, computed hash,
 /// and whether they match.
 pub fn verify_lock_hash_detail(json: &str) -> Result<LockHashDetail, serde_json::Error> {
-    let mut value: Value = serde_json::from_str(json)?;
+    let value: Value = serde_json::from_str(json)?;
+    verify_lock_hash_detail_value(&value)
+}
 
+/// Verify the `lock_hash` of an already parsed lockfile JSON value.
+pub fn verify_lock_hash_detail_value(value: &Value) -> Result<LockHashDetail, serde_json::Error> {
     // Extract stored lock_hash.
     let stored = value
         .get("lock_hash")
@@ -57,12 +57,7 @@ pub fn verify_lock_hash_detail(json: &str) -> Result<LockHashDetail, serde_json:
         .unwrap_or("")
         .to_string();
 
-    // Blank lock_hash for canonical computation.
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("lock_hash".to_string(), Value::String(String::new()));
-    }
-
-    let canonical = to_canonical_json(&value)?;
+    let canonical = canonical_json_with_top_level_lock_hash(value, "")?;
     let digest = Sha256::digest(canonical.as_bytes());
     let computed = format!("sha256:{:x}", digest);
 
@@ -88,24 +83,69 @@ where
     T: Serialize,
 {
     let json_value = serde_json::to_value(value)?;
-    let sorted = sort_json_value(json_value);
-    serde_json::to_string(&sorted)
+    canonical_json_from_value(&json_value)
 }
 
-fn sort_json_value(value: Value) -> Value {
+fn canonical_json_from_value(value: &Value) -> Result<String, serde_json::Error> {
+    let mut bytes = Vec::new();
+    write_canonical_value(value, &mut bytes)?;
+    Ok(String::from_utf8(bytes).expect("JSON serialization must emit UTF-8"))
+}
+
+fn canonical_json_with_top_level_lock_hash(
+    value: &Value,
+    lock_hash: &str,
+) -> Result<String, serde_json::Error> {
+    let mut bytes = Vec::new();
     match value {
         Value::Object(map) => {
-            let sorted = map
-                .into_iter()
-                .map(|(key, value)| (key, sort_json_value(value)))
-                .collect::<BTreeMap<String, Value>>()
-                .into_iter()
-                .collect();
-            Value::Object(sorted)
+            write_canonical_object(map, &mut bytes, Some(lock_hash))?;
         }
-        Value::Array(array) => Value::Array(array.into_iter().map(sort_json_value).collect()),
-        other => other,
+        other => write_canonical_value(other, &mut bytes)?,
     }
+    Ok(String::from_utf8(bytes).expect("JSON serialization must emit UTF-8"))
+}
+
+fn write_canonical_value(value: &Value, bytes: &mut Vec<u8>) -> Result<(), serde_json::Error> {
+    match value {
+        Value::Object(map) => write_canonical_object(map, bytes, None),
+        Value::Array(array) => {
+            bytes.push(b'[');
+            for (index, item) in array.iter().enumerate() {
+                if index > 0 {
+                    bytes.push(b',');
+                }
+                write_canonical_value(item, bytes)?;
+            }
+            bytes.push(b']');
+            Ok(())
+        }
+        other => serde_json::to_writer(bytes, other),
+    }
+}
+
+fn write_canonical_object(
+    map: &Map<String, Value>,
+    bytes: &mut Vec<u8>,
+    top_level_lock_hash: Option<&str>,
+) -> Result<(), serde_json::Error> {
+    let mut entries = map.iter().collect::<Vec<_>>();
+    entries.sort_unstable_by_key(|(key, _)| *key);
+
+    bytes.push(b'{');
+    for (index, (key, value)) in entries.into_iter().enumerate() {
+        if index > 0 {
+            bytes.push(b',');
+        }
+        serde_json::to_writer(&mut *bytes, key)?;
+        bytes.push(b':');
+        match top_level_lock_hash {
+            Some(lock_hash) if key == "lock_hash" => serde_json::to_writer(&mut *bytes, lock_hash)?,
+            _ => write_canonical_value(value, bytes)?,
+        }
+    }
+    bytes.push(b'}');
+    Ok(())
 }
 
 #[cfg(test)]

@@ -11,7 +11,51 @@ use serde_json::Value;
 use crate::cli::WitnessFilters;
 
 #[cfg(test)]
-pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static TEST_ENV_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+static TEST_ENV_OVERRIDE: std::sync::Mutex<Option<Option<String>>> = std::sync::Mutex::new(None);
+
+#[cfg(test)]
+pub(crate) struct TestWitnessEnvGuard {
+    original: Option<Option<String>>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl TestWitnessEnvGuard {
+    pub(crate) fn set(value: impl Into<String>) -> Self {
+        Self::replace(Some(value.into()))
+    }
+
+    pub(crate) fn unset() -> Self {
+        Self::replace(None)
+    }
+
+    fn replace(value: Option<String>) -> Self {
+        let lock = TEST_ENV_OVERRIDE_LOCK
+            .lock()
+            .expect("lock witness env override mutex");
+        let mut override_value = TEST_ENV_OVERRIDE
+            .lock()
+            .expect("lock witness env override value");
+        let original = override_value.replace(value);
+        drop(override_value);
+        Self {
+            original,
+            _lock: lock,
+        }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestWitnessEnvGuard {
+    fn drop(&mut self) {
+        if let Ok(mut override_value) = TEST_ENV_OVERRIDE.lock() {
+            *override_value = self.original.take();
+        }
+    }
+}
 
 /// Resolve the witness ledger path.
 ///
@@ -19,7 +63,9 @@ pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(()
 /// 1. `EPISTEMIC_WITNESS` env var, if set
 /// 2. `~/.epistemic/witness.jsonl`
 pub fn resolve_ledger_path() -> PathBuf {
-    if let Ok(path) = env::var("EPISTEMIC_WITNESS")
+    let witness_path =
+        test_witness_env_override().unwrap_or_else(|| env::var("EPISTEMIC_WITNESS").ok());
+    if let Some(path) = witness_path
         && !path.trim().is_empty()
     {
         return PathBuf::from(path);
@@ -28,6 +74,19 @@ pub fn resolve_ledger_path() -> PathBuf {
     home.push(".epistemic");
     home.push("witness.jsonl");
     home
+}
+
+#[cfg(test)]
+fn test_witness_env_override() -> Option<Option<String>> {
+    TEST_ENV_OVERRIDE
+        .lock()
+        .expect("lock witness env override value")
+        .clone()
+}
+
+#[cfg(not(test))]
+fn test_witness_env_override() -> Option<Option<String>> {
+    None
 }
 
 /// Best-effort home directory lookup without adding a crate dependency.
@@ -433,21 +492,21 @@ mod tests {
 
     #[test]
     fn resolve_ledger_path_uses_env_var() {
-        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", "/tmp/test-witness.jsonl");
+        let _guard = TestWitnessEnvGuard::set("/tmp/test-witness.jsonl");
         let path = resolve_ledger_path();
         assert_eq!(path, PathBuf::from("/tmp/test-witness.jsonl"));
     }
 
     #[test]
     fn resolve_ledger_path_falls_back_to_home() {
-        let _guard = EnvGuard::unset("EPISTEMIC_WITNESS");
+        let _guard = TestWitnessEnvGuard::unset();
         let path = resolve_ledger_path();
         assert!(path.ends_with(".epistemic/witness.jsonl"));
     }
 
     #[test]
     fn resolve_ledger_path_ignores_empty_env_var() {
-        let _guard = EnvGuard::set("EPISTEMIC_WITNESS", "");
+        let _guard = TestWitnessEnvGuard::set("");
         let path = resolve_ledger_path();
         assert!(path.ends_with(".epistemic/witness.jsonl"));
     }
@@ -877,55 +936,5 @@ not json
         assert_eq!(record["params"]["root"], "/data/dec");
         assert_eq!(record["params"]["strict"], true);
         assert_eq!(record["inputs"][0]["path"], "dec.lock.json");
-    }
-
-    /// RAII guard for environment variable manipulation in tests.
-    ///
-    /// `env::set_var`/`env::remove_var` are `unsafe` in Rust 2024 edition.
-    /// This is acceptable in test-only code; tests using EnvGuard must not
-    /// be run in parallel with other env-dependent tests.
-    #[allow(unsafe_code)]
-    struct EnvGuard {
-        key: String,
-        original: Option<String>,
-        _lock: std::sync::MutexGuard<'static, ()>,
-    }
-
-    #[allow(unsafe_code)]
-    impl EnvGuard {
-        fn set(key: &str, value: &str) -> Self {
-            let lock = super::TEST_ENV_LOCK.lock().expect("lock env mutex");
-            let original = env::var(key).ok();
-            // SAFETY: Test-only; tests using EnvGuard are not run in parallel.
-            unsafe { env::set_var(key, value) };
-            Self {
-                key: key.to_string(),
-                original,
-                _lock: lock,
-            }
-        }
-
-        fn unset(key: &str) -> Self {
-            let lock = super::TEST_ENV_LOCK.lock().expect("lock env mutex");
-            let original = env::var(key).ok();
-            // SAFETY: Test-only; tests using EnvGuard are not run in parallel.
-            unsafe { env::remove_var(key) };
-            Self {
-                key: key.to_string(),
-                original,
-                _lock: lock,
-            }
-        }
-    }
-
-    #[allow(unsafe_code)]
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match &self.original {
-                // SAFETY: Test-only; restoring original env state on drop.
-                Some(val) => unsafe { env::set_var(&self.key, val) },
-                None => unsafe { env::remove_var(&self.key) },
-            }
-        }
     }
 }
