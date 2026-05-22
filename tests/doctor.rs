@@ -3,8 +3,6 @@ use std::{path::Path, process::Command};
 use serde_json::Value;
 use tempfile::TempDir;
 
-mod support;
-
 fn isolated_command(home: &Path, witness_path: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_lock"));
     command.env("HOME", home);
@@ -133,63 +131,10 @@ fn describe_runs_without_guard_hooks() {
 }
 
 #[test]
-fn domain_lock_fails_closed_without_guard_hooks() {
-    let home = TempDir::new().expect("temp home should be created");
-    let witness_path = home.path().join("witness.jsonl");
-    let output = isolated_command(home.path(), &witness_path)
-        .arg("--no-witness")
-        .output()
-        .expect("lock domain command should run");
-
-    assert_eq!(output.status.code(), Some(2));
-    let refusal = parse_stdout_json(&output);
-    assert_eq!(refusal["refusal"]["code"], "E_GUARD_PREFLIGHT");
-    assert!(
-        refusal["refusal"]["detail"]["findings"]
-            .as_array()
-            .is_some_and(|findings| findings.iter().any(|finding| finding
-                .as_str()
-                .is_some_and(|finding| finding.contains("dcg Bash hook is missing"))))
-    );
-    assert!(
-        !witness_path.exists(),
-        "guard refusal must not append or create the witness ledger"
-    );
-}
-
-#[test]
-fn domain_lock_fails_closed_with_invalid_dcg_hook() {
-    let home = TempDir::new().expect("temp home should be created");
-    let witness_path = home.path().join("witness.jsonl");
-    support::write_guard_hooks(home.path(), "/definitely/missing/dcg");
-
-    let output = isolated_command(home.path(), &witness_path)
-        .arg("--no-witness")
-        .output()
-        .expect("lock domain command should run");
-
-    assert_eq!(output.status.code(), Some(2));
-    let refusal = parse_stdout_json(&output);
-    assert_eq!(refusal["refusal"]["code"], "E_GUARD_PREFLIGHT");
-    assert!(
-        refusal["refusal"]["detail"]["findings"]
-            .as_array()
-            .is_some_and(|findings| findings.iter().any(|finding| finding
-                .as_str()
-                .is_some_and(|finding| finding.contains("dcg Bash hook command"))))
-    );
-    assert!(
-        !witness_path.exists(),
-        "guard refusal must not append or create the witness ledger"
-    );
-}
-
-#[test]
-fn domain_lock_runs_when_guard_hooks_are_healthy() {
+fn domain_lock_runs_without_guard_hooks() {
     let home = TempDir::new().expect("temp home should be created");
     let manifest_path = home.path().join("input.jsonl");
     let witness_path = home.path().join("witness.jsonl");
-    support::write_healthy_guard_hooks(home.path());
     std::fs::write(
         &manifest_path,
         r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaaaaaa","size":10}
@@ -213,7 +158,7 @@ fn domain_lock_runs_when_guard_hooks_are_healthy() {
 }
 
 #[test]
-fn verify_fails_closed_without_guard_hooks() {
+fn verify_runs_without_guard_hooks_and_reports_lockfile_io() {
     let home = TempDir::new().expect("temp home should be created");
     let witness_path = home.path().join("witness.jsonl");
     let output = isolated_command(home.path(), &witness_path)
@@ -228,9 +173,9 @@ fn verify_fails_closed_without_guard_hooks() {
 
     assert_eq!(output.status.code(), Some(2));
     let refusal = parse_stdout_json(&output);
-    assert_eq!(refusal["refusal"]["code"], "E_GUARD_PREFLIGHT");
+    assert_eq!(refusal["refusal"]["code"], "E_IO");
     assert!(
         !witness_path.exists(),
-        "guard refusal must not append or create the witness ledger"
+        "verify refusal with --no-witness must not append or create the witness ledger"
     );
 }

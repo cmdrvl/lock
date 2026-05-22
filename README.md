@@ -306,7 +306,6 @@ If a non-skipped record lacks `bytes_hash`, `lock` refuses with `E_MISSING_HASH`
 |------|---------|-----------|
 | `E_EMPTY` | No input records | Provide artifacts (run upstream pipeline) |
 | `E_BAD_INPUT` | Malformed JSONL or unknown record version | Re-run the upstream JSONL pipeline, or use `pack seal` for standalone sealing |
-| `E_GUARD_PREFLIGHT` | Required Claude `PreToolUse` guard hooks are missing or unhealthy | Install or repair `veil` and `dcg` hooks |
 | `E_MISSING_HASH` | Non-skipped records missing `bytes_hash` | Run `hashbytes` before `lock` |
 
 Every refusal includes the error code, detail, and a concrete `next_command`.

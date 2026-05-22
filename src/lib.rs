@@ -4,7 +4,6 @@ use chrono::{SecondsFormat, Utc};
 
 pub mod cli;
 pub mod doctor;
-pub mod guard;
 pub mod input;
 pub mod lockfile;
 pub mod output;

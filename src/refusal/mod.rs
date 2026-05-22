@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use serde::Serialize;
 use serde_json::Value;
 
@@ -21,8 +19,6 @@ pub enum RefusalCode {
     Empty,
     /// Invalid JSONL (parse error) or unknown record version.
     BadInput,
-    /// Required guard hooks are missing or unhealthy.
-    GuardPreflight,
     /// One or more non-skipped records lack `bytes_hash`.
     MissingHash,
 }
@@ -33,7 +29,6 @@ impl RefusalCode {
         match self {
             Self::Empty => "E_EMPTY",
             Self::BadInput => "E_BAD_INPUT",
-            Self::GuardPreflight => "E_GUARD_PREFLIGHT",
             Self::MissingHash => "E_MISSING_HASH",
         }
     }
@@ -187,36 +182,6 @@ pub fn missing_hash(count: usize, all_paths: Vec<String>) -> RefusalEnvelope {
     }
 }
 
-/// Build an `E_GUARD_PREFLIGHT` refusal when required Claude guard hooks are absent.
-pub fn guard_preflight(settings_path: Option<&Path>, findings: Vec<String>) -> RefusalEnvelope {
-    RefusalEnvelope {
-        version: LOCK_VERSION.to_string(),
-        outcome: "REFUSAL".to_string(),
-        refusal: Refusal {
-            code: RefusalCode::GuardPreflight,
-            message: "Guard preflight failed; refusing to lock until Claude PreToolUse guard hooks are installed and healthy".to_string(),
-            detail: serde_json::json!({
-                "settings_path": settings_path.map(|path| path.display().to_string()),
-                "required": {
-                    "veil": {
-                        "event": "PreToolUse",
-                        "matchers": ["Read", "Grep", "Bash"]
-                    },
-                    "dcg": {
-                        "event": "PreToolUse",
-                        "matchers": ["Bash"]
-                    }
-                },
-                "findings": findings,
-            }),
-            next_command: Some(
-                "Install or repair veil and dcg Claude PreToolUse hooks, then rerun lock"
-                    .to_string(),
-            ),
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,44 +259,12 @@ mod tests {
     }
 
     #[test]
-    fn guard_preflight_envelope_shape() {
-        let settings_path = Path::new("/tmp/home/.claude/settings.json");
-        let env = guard_preflight(
-            Some(settings_path),
-            vec!["dcg Bash hook is missing".to_owned()],
-        );
-
-        assert_eq!(env.refusal.code, RefusalCode::GuardPreflight);
-        assert_eq!(env.refusal.code.as_str(), "E_GUARD_PREFLIGHT");
-        assert_eq!(
-            env.refusal.detail["settings_path"],
-            "/tmp/home/.claude/settings.json"
-        );
-        assert_eq!(
-            env.refusal.detail["required"]["veil"]["matchers"],
-            serde_json::json!(["Read", "Grep", "Bash"])
-        );
-        assert_eq!(
-            env.refusal.detail["required"]["dcg"]["matchers"],
-            serde_json::json!(["Bash"])
-        );
-        assert_eq!(
-            env.refusal.detail["findings"][0],
-            "dcg Bash hook is missing"
-        );
-        assert!(env.refusal.next_command.is_some());
-    }
-
-    #[test]
     fn refusal_code_serialize() {
         let json = serde_json::to_string(&RefusalCode::Empty).unwrap();
         assert_eq!(json, "\"E_EMPTY\"");
 
         let json = serde_json::to_string(&RefusalCode::BadInput).unwrap();
         assert_eq!(json, "\"E_BAD_INPUT\"");
-
-        let json = serde_json::to_string(&RefusalCode::GuardPreflight).unwrap();
-        assert_eq!(json, "\"E_GUARD_PREFLIGHT\"");
 
         let json = serde_json::to_string(&RefusalCode::MissingHash).unwrap();
         assert_eq!(json, "\"E_MISSING_HASH\"");
