@@ -1,7 +1,8 @@
 use std::env;
-use std::fs;
+use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 use fs2::FileExt;
@@ -15,6 +16,9 @@ static TEST_ENV_OVERRIDE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 static TEST_ENV_OVERRIDE: std::sync::Mutex<Option<Option<String>>> = std::sync::Mutex::new(None);
+
+const TOOL_NAME: &str = "lock";
+const WITNESS_ENV: &str = "EPISTEMIC_WITNESS";
 
 #[cfg(test)]
 pub(crate) struct TestWitnessEnvGuard {
@@ -59,21 +63,49 @@ impl Drop for TestWitnessEnvGuard {
 
 /// Resolve the witness ledger path.
 ///
-/// Resolution order (per PLAN.md):
+/// Resolution order:
 /// 1. `EPISTEMIC_WITNESS` env var, if set
-/// 2. `~/.epistemic/witness.jsonl`
+/// 2. `~/.cmdrvl/state/witness/witness.jsonl`
 pub fn resolve_ledger_path() -> PathBuf {
-    let witness_path =
-        test_witness_env_override().unwrap_or_else(|| env::var("EPISTEMIC_WITNESS").ok());
-    if let Some(path) = witness_path
-        && !path.trim().is_empty()
-    {
+    resolve_ledger_path_from_env(env_value)
+}
+
+fn resolve_ledger_path_for_append() -> io::Result<PathBuf> {
+    ensure_ledger_migrated_from_env(env_value)?;
+    let path = resolve_ledger_path();
+    if non_empty_env(env_value, WITNESS_ENV).is_none() {
+        prepare_canonical_tree_from_env(env_value)?;
+    }
+    Ok(path)
+}
+
+fn resolve_ledger_path_for_query() -> io::Result<PathBuf> {
+    ensure_ledger_migrated_from_env(env_value)?;
+    Ok(resolve_ledger_path())
+}
+
+fn resolve_ledger_path_from_env<F>(get_env: F) -> PathBuf
+where
+    F: Fn(&str) -> Option<OsString> + Copy,
+{
+    if let Some(path) = non_empty_env(get_env, WITNESS_ENV) {
         return PathBuf::from(path);
     }
-    let mut home = dirs_fallback();
-    home.push(".epistemic");
-    home.push("witness.jsonl");
-    home
+
+    cmdrvl_root_from_env(get_env)
+        .join("state")
+        .join("witness")
+        .join("witness.jsonl")
+}
+
+fn env_value(key: &str) -> Option<OsString> {
+    if key == WITNESS_ENV
+        && let Some(value) = test_witness_env_override()
+    {
+        return value.map(OsString::from);
+    }
+
+    env::var_os(key)
 }
 
 #[cfg(test)]
@@ -89,12 +121,198 @@ fn test_witness_env_override() -> Option<Option<String>> {
     None
 }
 
-/// Best-effort home directory lookup without adding a crate dependency.
-fn dirs_fallback() -> PathBuf {
-    env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+fn non_empty_env<F>(get_env: F, key: &str) -> Option<OsString>
+where
+    F: Fn(&str) -> Option<OsString> + Copy,
+{
+    let value = get_env(key)?;
+    if value.is_empty() {
+        return None;
+    }
+    if value.to_str().is_some_and(|value| value.trim().is_empty()) {
+        return None;
+    }
+    Some(value)
+}
+
+fn cmdrvl_root_from_env<F>(get_env: F) -> PathBuf
+where
+    F: Fn(&str) -> Option<OsString> + Copy,
+{
+    if let Some(home) =
+        non_empty_env(get_env, "HOME").or_else(|| non_empty_env(get_env, "USERPROFILE"))
+    {
+        return PathBuf::from(home).join(".cmdrvl");
+    }
+
+    PathBuf::from(".cmdrvl")
+}
+
+fn ensure_ledger_migrated_from_env<F>(get_env: F) -> io::Result<()>
+where
+    F: Fn(&str) -> Option<OsString> + Copy,
+{
+    if non_empty_env(get_env, WITNESS_ENV).is_some() {
+        return Ok(());
+    }
+
+    let canonical = resolve_ledger_path_from_env(get_env);
+    let Some(legacy) = legacy_ledger_paths_from_env(get_env)
+        .into_iter()
+        .find(|path| path != &canonical && path.is_file())
+    else {
+        return Ok(());
+    };
+
+    let root = cmdrvl_root_from_env(get_env);
+    prepare_canonical_tree_from_env(get_env)?;
+    let notice_path = root.join("notices").join("deprecated-paths.jsonl");
+    let migration_path = root.join("migrations").join("applied.jsonl");
+
+    if canonical.exists() {
+        append_record_once(
+            &notice_path,
+            deprecation_record(
+                &legacy,
+                &canonical,
+                "legacy_path_present",
+                "canonical_preferred",
+            ),
+        )?;
+        return Ok(());
+    }
+
+    if let Some(parent) = canonical.parent() {
+        fs::create_dir_all(parent)?;
+        harden_directory(parent)?;
+    }
+
+    fs::copy(&legacy, &canonical)?;
+    let permissions = fs::metadata(&legacy)?.permissions();
+    fs::set_permissions(&canonical, permissions)?;
+
+    append_record_once(
+        &migration_path,
+        migration_record(&legacy, &canonical, "copied_legacy_to_canonical"),
+    )?;
+    append_record_once(
+        &notice_path,
+        deprecation_record(
+            &legacy,
+            &canonical,
+            "legacy_path_migrated",
+            "canonical_created",
+        ),
+    )?;
+
+    Ok(())
+}
+
+fn prepare_canonical_tree_from_env<F>(get_env: F) -> io::Result<()>
+where
+    F: Fn(&str) -> Option<OsString> + Copy,
+{
+    if non_empty_env(get_env, WITNESS_ENV).is_some() {
+        return Ok(());
+    }
+
+    let root = cmdrvl_root_from_env(get_env);
+    for dir in [
+        root.clone(),
+        root.join("state"),
+        root.join("state").join("witness"),
+    ] {
+        fs::create_dir_all(&dir)?;
+        harden_directory(&dir)?;
+    }
+
+    Ok(())
+}
+
+fn legacy_ledger_paths_from_env<F>(get_env: F) -> Vec<PathBuf>
+where
+    F: Fn(&str) -> Option<OsString> + Copy,
+{
+    let mut paths = Vec::new();
+
+    if let Some(home) =
+        non_empty_env(get_env, "HOME").or_else(|| non_empty_env(get_env, "USERPROFILE"))
+    {
+        paths.push(PathBuf::from(home).join(".epistemic").join("witness.jsonl"));
+    }
+
+    paths.push(PathBuf::from(".epistemic").join("witness.jsonl"));
+    paths
+}
+
+fn migration_record(source: &Path, destination: &Path, action: &str) -> Value {
+    serde_json::json!({
+        "version": "cmdrvl.migration.v1",
+        "tool": TOOL_NAME,
+        "path_class": "witness_ledger",
+        "source_path": source.display().to_string(),
+        "destination_path": destination.display().to_string(),
+        "action": action,
+        "outcome": "ok",
+        "secret_values_recorded": false
+    })
+}
+
+fn deprecation_record(source: &Path, destination: &Path, action: &str, outcome: &str) -> Value {
+    serde_json::json!({
+        "version": "cmdrvl.deprecated_path_notice.v1",
+        "tool": TOOL_NAME,
+        "path_class": "witness_ledger",
+        "source_path": source.display().to_string(),
+        "destination_path": destination.display().to_string(),
+        "action": action,
+        "outcome": outcome,
+        "secret_values_recorded": false
+    })
+}
+
+fn append_record_once(path: &Path, record: Value) -> io::Result<()> {
+    if record_already_exists(path, &record)? {
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+        harden_directory(parent)?;
+    }
+
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(file, "{record}")?;
+    Ok(())
+}
+
+fn record_already_exists(path: &Path, record: &Value) -> io::Result<bool> {
+    let Ok(contents) = fs::read_to_string(path) else {
+        return Ok(false);
+    };
+
+    Ok(contents.lines().any(|line| {
+        let Ok(existing) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
+
+        existing.get("tool") == record.get("tool")
+            && existing.get("path_class") == record.get("path_class")
+            && existing.get("source_path") == record.get("source_path")
+            && existing.get("destination_path") == record.get("destination_path")
+            && existing.get("action") == record.get("action")
+    }))
+}
+
+#[cfg(unix)]
+fn harden_directory(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+}
+
+#[cfg(not(unix))]
+fn harden_directory(_path: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 /// A parsed witness record from the ledger.
@@ -256,7 +474,13 @@ pub fn append_witness_record(
     params: Value,
     inputs: Value,
 ) {
-    let ledger_path = resolve_ledger_path();
+    let ledger_path = match resolve_ledger_path_for_append() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("lock: witness append warning: {e}");
+            return;
+        }
+    };
     if let Err(e) = append_witness_record_to(
         outcome,
         exit_code,
@@ -335,7 +559,13 @@ fn append_witness_record_to(
 /// - `1`: no matches
 /// - `2`: error
 pub fn dispatch_query(filters: &WitnessFilters, limit: usize, json_output: bool) -> u8 {
-    let path = resolve_ledger_path();
+    let path = match resolve_ledger_path_for_query() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("lock: witness ledger error: {e}");
+            return 2;
+        }
+    };
     let records = match read_ledger(&path) {
         Ok(r) => r,
         Err(e) => {
@@ -390,7 +620,13 @@ pub fn dispatch_query(filters: &WitnessFilters, limit: usize, json_output: bool)
 /// - `1`: no records
 /// - `2`: error
 pub fn dispatch_last(json_output: bool) -> u8 {
-    let path = resolve_ledger_path();
+    let path = match resolve_ledger_path_for_query() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("lock: witness ledger error: {e}");
+            return 2;
+        }
+    };
     let records = match read_ledger(&path) {
         Ok(r) => r,
         Err(e) => {
@@ -436,7 +672,13 @@ pub fn dispatch_last(json_output: bool) -> u8 {
 /// Exit codes:
 /// - `0`: always (count is valid even if zero)
 pub fn dispatch_count(filters: &WitnessFilters, json_output: bool) -> u8 {
-    let path = resolve_ledger_path();
+    let path = match resolve_ledger_path_for_query() {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("lock: witness ledger error: {e}");
+            return 2;
+        }
+    };
     let records = match read_ledger(&path) {
         Ok(r) => r,
         Err(e) => {
@@ -473,6 +715,8 @@ fn print_record_human(record: &WitnessRecord) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+    use std::path::Path;
 
     fn make_record(tool: &str, outcome: &str, ts: &str) -> WitnessRecord {
         WitnessRecord {
@@ -490,6 +734,13 @@ mod tests {
         }
     }
 
+    fn canonical_witness_path(home: &Path) -> PathBuf {
+        home.join(".cmdrvl")
+            .join("state")
+            .join("witness")
+            .join("witness.jsonl")
+    }
+
     #[test]
     fn resolve_ledger_path_uses_env_var() {
         let _guard = TestWitnessEnvGuard::set("/tmp/test-witness.jsonl");
@@ -501,14 +752,105 @@ mod tests {
     fn resolve_ledger_path_falls_back_to_home() {
         let _guard = TestWitnessEnvGuard::unset();
         let path = resolve_ledger_path();
-        assert!(path.ends_with(".epistemic/witness.jsonl"));
+        assert!(path.ends_with(".cmdrvl/state/witness/witness.jsonl"));
     }
 
     #[test]
     fn resolve_ledger_path_ignores_empty_env_var() {
         let _guard = TestWitnessEnvGuard::set("");
         let path = resolve_ledger_path();
-        assert!(path.ends_with(".epistemic/witness.jsonl"));
+        assert!(path.ends_with(".cmdrvl/state/witness/witness.jsonl"));
+    }
+
+    #[test]
+    fn resolve_ledger_path_from_env_uses_cmdrvl_home() {
+        let path = resolve_ledger_path_from_env(|key| match key {
+            "HOME" => Some(OsString::from("/tmp/home")),
+            "EPISTEMIC_WITNESS" | "USERPROFILE" => None,
+            _ => None,
+        });
+
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/home/.cmdrvl/state/witness/witness.jsonl")
+        );
+    }
+
+    #[test]
+    fn explicit_witness_override_skips_migration() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let legacy = home.join(".epistemic").join("witness.jsonl");
+        std::fs::create_dir_all(legacy.parent().expect("legacy parent")).unwrap();
+        std::fs::write(&legacy, "{\"version\":\"witness.v0\"}\n").unwrap();
+        let override_path = home.join("override.jsonl");
+
+        ensure_ledger_migrated_from_env(|key| match key {
+            "HOME" => Some(home.as_os_str().to_owned()),
+            "EPISTEMIC_WITNESS" => Some(override_path.as_os_str().to_owned()),
+            "USERPROFILE" => None,
+            _ => None,
+        })
+        .unwrap();
+
+        assert!(!canonical_witness_path(home).exists());
+        assert!(!home.join(".cmdrvl/migrations/applied.jsonl").exists());
+    }
+
+    #[test]
+    fn migrates_legacy_home_witness_to_cmdrvl_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let legacy = home.join(".epistemic").join("witness.jsonl");
+        std::fs::create_dir_all(legacy.parent().expect("legacy parent")).unwrap();
+        std::fs::write(&legacy, "{\"version\":\"witness.v0\"}\n").unwrap();
+
+        ensure_ledger_migrated_from_env(|key| match key {
+            "HOME" => Some(home.as_os_str().to_owned()),
+            "EPISTEMIC_WITNESS" | "USERPROFILE" => None,
+            _ => None,
+        })
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(canonical_witness_path(home)).unwrap(),
+            "{\"version\":\"witness.v0\"}\n"
+        );
+
+        let migration =
+            std::fs::read_to_string(home.join(".cmdrvl/migrations/applied.jsonl")).unwrap();
+        assert!(migration.contains("cmdrvl.migration.v1"));
+        assert!(migration.contains("copied_legacy_to_canonical"));
+
+        let notice =
+            std::fs::read_to_string(home.join(".cmdrvl/notices/deprecated-paths.jsonl")).unwrap();
+        assert!(notice.contains("cmdrvl.deprecated_path_notice.v1"));
+        assert!(notice.contains("legacy_path_migrated"));
+    }
+
+    #[test]
+    fn migration_prefers_existing_canonical_without_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        let legacy = home.join(".epistemic").join("witness.jsonl");
+        let canonical = canonical_witness_path(home);
+        std::fs::create_dir_all(legacy.parent().expect("legacy parent")).unwrap();
+        std::fs::create_dir_all(canonical.parent().expect("canonical parent")).unwrap();
+        std::fs::write(&legacy, "legacy\n").unwrap();
+        std::fs::write(&canonical, "canonical\n").unwrap();
+
+        ensure_ledger_migrated_from_env(|key| match key {
+            "HOME" => Some(home.as_os_str().to_owned()),
+            "EPISTEMIC_WITNESS" | "USERPROFILE" => None,
+            _ => None,
+        })
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&canonical).unwrap(), "canonical\n");
+        let notice =
+            std::fs::read_to_string(home.join(".cmdrvl/notices/deprecated-paths.jsonl")).unwrap();
+        assert!(notice.contains("legacy_path_present"));
+        assert!(notice.contains("canonical_preferred"));
     }
 
     #[test]

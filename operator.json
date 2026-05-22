@@ -107,7 +107,7 @@
         "error_exit_code": 2,
         "ledger_path_resolution": [
           "EPISTEMIC_WITNESS",
-          "~/.epistemic/witness.jsonl"
+          "~/.cmdrvl/state/witness/witness.jsonl"
         ]
       }
     },

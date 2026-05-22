@@ -465,8 +465,9 @@ lock witness count [--tool <name>] [--since <iso8601>] [--until <iso8601>] \
 
 ### Ledger Location
 
-- Default: `~/.epistemic/witness.jsonl`
+- Default: `~/.cmdrvl/state/witness/witness.jsonl`
 - Override: set `EPISTEMIC_WITNESS` environment variable
+- Migration: if `~/.epistemic/witness.jsonl` exists and no override is set, `lock` copies it to the canonical `~/.cmdrvl` ledger and records migration/deprecation JSONL under `~/.cmdrvl/migrations/` and `~/.cmdrvl/notices/`
 - Malformed ledger lines are skipped; valid lines continue to be processed.
 
 </details>

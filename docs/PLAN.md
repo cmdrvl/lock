@@ -127,7 +127,8 @@ lock witness <query|last|count> [OPTIONS]
 - Opt-out: `--no-witness`.
 - Ledger path resolution:
   1. `EPISTEMIC_WITNESS` env var, if set
-  2. `~/.epistemic/witness.jsonl` otherwise
+  2. `~/.cmdrvl/state/witness/witness.jsonl` otherwise
+- Migration: when no override is set, an existing `~/.epistemic/witness.jsonl` is copied to the canonical ledger and migration/deprecation records are written under `~/.cmdrvl/migrations/` and `~/.cmdrvl/notices/`.
 - Witness failures never change the domain exit code. If append/query fails, print a warning to stderr and preserve domain result semantics.
 - `outcome` in the witness record: `"LOCK_CREATED"` (exit 0), `"LOCK_PARTIAL"` (exit 1), or `"REFUSAL"` (exit 2).
 
@@ -784,7 +785,7 @@ The versions travel through the pipeline on every record — lock doesn't need t
 
 | Scenario | Assertion |
 |----------|-----------|
-| Default run | Witness record appended to `~/.epistemic/witness.jsonl` |
+| Default run | Witness record appended to `~/.cmdrvl/state/witness/witness.jsonl` |
 | `--no-witness` | No witness record written |
 | `lock witness query` | Returns matching records from ledger |
 | `lock witness last` | Returns most recent lock record |

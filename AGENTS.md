@@ -102,6 +102,8 @@ Reject unknown/missing upstream `version` with `E_BAD_INPUT`.
 Ambient witness semantics must match spine conventions (`shape`/`rvl` parity):
 - Append by default
 - `--no-witness` opt-out
+- Default ledger path: `~/.cmdrvl/state/witness/witness.jsonl`
+- Explicit ledger override: `EPISTEMIC_WITNESS`
 - Witness failures do not mutate domain outcome semantics
 
 ### 7. Verify reuses existing self-hash functions

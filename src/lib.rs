@@ -318,6 +318,9 @@ mod tests {
 
     #[test]
     fn run_lock_returns_refusal_for_missing_input_file() {
+        let ledger_dir = tempfile::tempdir().expect("create temp dir");
+        let ledger_path = ledger_dir.path().join("witness.jsonl");
+        let _guard = TestWitnessEnvGuard::set(ledger_path.display().to_string());
         let mut cli = make_cli();
         cli.input = Some("does-not-exist.jsonl".into());
 

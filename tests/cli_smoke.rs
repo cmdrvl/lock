@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Output;
+use std::process::{Command, Output};
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -18,7 +18,18 @@ fn run_lock(args: &[&str], ledger_path: Option<&Path>) -> Output {
     cmd.args(args);
     if let Some(path) = ledger_path {
         cmd.env("EPISTEMIC_WITNESS", path);
+    } else {
+        cmd.env_remove("EPISTEMIC_WITNESS");
     }
+    cmd.output().expect("run lock binary")
+}
+
+fn run_lock_with_home(args: &[&str], home: &Path) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_lock"));
+    cmd.args(args);
+    cmd.env("HOME", home);
+    cmd.env("USERPROFILE", home.join("profile"));
+    cmd.env_remove("EPISTEMIC_WITNESS");
     cmd.output().expect("run lock binary")
 }
 
@@ -184,6 +195,51 @@ fn smoke_witness_query_input_hash_filter_works_for_real_runs() {
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["inputs"][0]["hash"], input_hash);
     assert_eq!(items[0]["outcome"], "LOCK_CREATED");
+}
+
+#[test]
+fn smoke_default_witness_migrates_legacy_home_ledger_before_append() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    fs::create_dir_all(&home).unwrap();
+    let legacy = home.join(".epistemic").join("witness.jsonl");
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    fs::write(
+        &legacy,
+        r#"{"tool":"lock","outcome":"LEGACY","ts":"2026-01-01T00:00:00Z"}
+"#,
+    )
+    .unwrap();
+
+    let input = write_manifest(
+        &dir,
+        "created.jsonl",
+        r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaaaaaa","size":10}
+"#,
+    );
+
+    let output = run_lock_with_home(&[input.to_str().unwrap()], &home);
+    assert_eq!(output.status.code(), Some(0));
+
+    let canonical = home
+        .join(".cmdrvl")
+        .join("state")
+        .join("witness")
+        .join("witness.jsonl");
+    let ledger = fs::read_to_string(canonical).unwrap();
+    let lines: Vec<Value> = ledger
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["outcome"], "LEGACY");
+    assert_eq!(lines[1]["outcome"], "LOCK_CREATED");
+
+    let migration = fs::read_to_string(home.join(".cmdrvl/migrations/applied.jsonl")).unwrap();
+    assert!(migration.contains("copied_legacy_to_canonical"));
+
+    let notice = fs::read_to_string(home.join(".cmdrvl/notices/deprecated-paths.jsonl")).unwrap();
+    assert!(notice.contains("legacy_path_migrated"));
 }
 
 #[test]
