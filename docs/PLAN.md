@@ -216,6 +216,7 @@ Records missing `bytes_hash` (without `_skipped: true`) trigger a refusal (`E_MI
 |------|---------|-----------|
 | `E_EMPTY` | No input records (stdin was empty or file is empty) | Provide artifacts — run `vacuum` first |
 | `E_BAD_INPUT` | Invalid JSONL (parse error) or unknown record version | Re-run the upstream JSONL pipeline, or use `pack seal` for standalone sealing |
+| `E_GUARD_PREFLIGHT` | Required Claude `PreToolUse` guard hooks are missing or unhealthy | Install or repair `veil` and `dcg` hooks |
 | `E_MISSING_HASH` | One or more non-skipped records lack `bytes_hash` | Run `hashbytes` first |
 
 ### Refusal JSON envelope
@@ -258,6 +259,16 @@ E_BAD_INPUT (unknown version):
     "version": "hash.v2",
     "expected_versions": ["vacuum.v0", "hash.v0", "fingerprint.v0"],
     "standalone_alternative": "pack seal <artifact-or-lockfile> --output <evidence-dir>"
+  }
+
+E_GUARD_PREFLIGHT:
+  {
+    "settings_path": "/home/operator/.claude/settings.json",
+    "required": {
+      "veil": { "event": "PreToolUse", "matchers": ["Read", "Grep", "Bash"] },
+      "dcg": { "event": "PreToolUse", "matchers": ["Bash"] }
+    },
+    "findings": ["dcg Bash hook is missing"]
   }
 
 E_MISSING_HASH:
@@ -730,6 +741,7 @@ The versions travel through the pipeline on every record — lock doesn't need t
   "refusals": [
     { "code": "E_EMPTY", "message": "No input records", "action": "run_upstream", "tool": "vacuum" },
     { "code": "E_BAD_INPUT", "message": "Invalid JSONL or unknown record version", "action": "rerun_pipeline_or_pack_seal", "input_mode": "pipeline_only", "standalone_alternative": "pack seal" },
+    { "code": "E_GUARD_PREFLIGHT", "message": "Required Claude PreToolUse guard hooks are missing or unhealthy", "action": "repair_guard_hooks" },
     { "code": "E_MISSING_HASH", "message": "Records lack bytes_hash", "action": "run_upstream", "tool": "hash" }
   ],
 
@@ -801,7 +813,7 @@ The versions travel through the pipeline on every record — lock doesn't need t
 - `_skipped` record handling with exit code 1
 - Self-hash (SHA256 of canonical JSON)
 - `tool_versions` accumulation from pipeline
-- Refusal codes: `E_EMPTY`, `E_BAD_INPUT`, `E_MISSING_HASH`
+- Refusal codes: `E_EMPTY`, `E_BAD_INPUT`, `E_GUARD_PREFLIGHT`, `E_MISSING_HASH`
 - Refusal JSON envelope with `next_command`
 - `--describe`, `--schema`, `--version`
 - Witness ledger protocol

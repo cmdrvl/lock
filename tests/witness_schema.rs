@@ -1,11 +1,8 @@
 use std::fs;
-use std::process::Command;
 
 use serde_json::Value;
 
-fn lock_binary() -> &'static str {
-    env!("CARGO_BIN_EXE_lock")
-}
+mod support;
 
 fn schema() -> Value {
     serde_json::from_str(include_str!("../schemas/witness-v0.schema.json"))
@@ -33,7 +30,7 @@ fn run_and_read_single_witness_record(manifest_jsonl: &str) -> (i32, Value) {
 
     fs::write(&manifest_path, manifest_jsonl).unwrap();
 
-    let output = Command::new(lock_binary())
+    let output = support::lock_command("witness-schema")
         .arg(manifest_path.to_str().unwrap())
         .env("EPISTEMIC_WITNESS", &ledger_path)
         .output()

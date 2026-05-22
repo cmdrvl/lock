@@ -1,17 +1,15 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 
-fn lock_binary() -> &'static str {
-    env!("CARGO_BIN_EXE_lock")
-}
+mod support;
 
 fn run_lock(args: &[&str], ledger_path: Option<&Path>) -> Output {
-    let mut cmd = Command::new(lock_binary());
+    let mut cmd = support::lock_command("verify-e2e");
     cmd.args(args);
     if let Some(path) = ledger_path {
         cmd.env("EPISTEMIC_WITNESS", path);

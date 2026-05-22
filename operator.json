@@ -167,6 +167,11 @@
       },
       "refusals": [
         {
+          "code": "E_GUARD_PREFLIGHT",
+          "message": "Required Claude PreToolUse guard hooks are missing or unhealthy",
+          "action": "repair_guard_hooks"
+        },
+        {
           "code": "E_IO",
           "message": "Cannot read lockfile",
           "action": "check_path"
@@ -249,6 +254,11 @@
       "action": "rerun_pipeline_or_pack_seal",
       "input_mode": "pipeline_only",
       "standalone_alternative": "pack seal"
+    },
+    {
+      "code": "E_GUARD_PREFLIGHT",
+      "message": "Required Claude PreToolUse guard hooks are missing or unhealthy",
+      "action": "repair_guard_hooks"
     },
     {
       "code": "E_MISSING_HASH",

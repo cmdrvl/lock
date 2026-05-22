@@ -182,7 +182,12 @@ pub fn run() -> u8 {
 
     // Subcommands dispatch after display-mode short-circuits.
     match &cli.command {
-        Some(Command::Verify(args)) => return dispatch_verify(args),
+        Some(Command::Verify(args)) => {
+            if let Err(refusal) = crate::guard::enforce_guard_preflight() {
+                return dispatch_guard_refusal(*refusal);
+            }
+            return dispatch_verify(args);
+        }
         Some(Command::Witness { action }) => return dispatch_witness(action),
         Some(Command::Doctor {
             robot_triage,
@@ -193,7 +198,15 @@ pub fn run() -> u8 {
     }
 
     // Main lock flow — delegates to orchestration (bd-1ab).
+    if let Err(refusal) = crate::guard::enforce_guard_preflight() {
+        return dispatch_guard_refusal(*refusal);
+    }
     dispatch_lock(&cli)
+}
+
+fn dispatch_guard_refusal(refusal: crate::refusal::RefusalEnvelope) -> u8 {
+    println!("{}", refusal.to_json());
+    2
 }
 
 /// Dispatch verify subcommand to the verify module.
