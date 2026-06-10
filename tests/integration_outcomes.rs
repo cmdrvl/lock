@@ -34,9 +34,14 @@ fn run_pipeline(
     note: Option<&str>,
 ) -> PipelineResult {
     let result = read_jsonl_reader(Cursor::new(jsonl)).expect("JSONL should parse");
-    let ReadResult::Records(records) = result else {
-        panic!("expected records, got Empty");
+    let records = match result {
+        ReadResult::Records(records) => records,
+        ReadResult::Empty => Vec::new(),
     };
+    assert!(
+        !records.is_empty(),
+        "fixture JSONL should produce at least one record"
+    );
 
     validate_records(&records).expect("validation should pass");
 
@@ -607,6 +612,7 @@ fn run_lock_exit_0_for_valid_input() {
         no_witness: true,
         describe: false,
         schema: false,
+        robot_triage: false,
     };
 
     let code = lock::run_lock(&cli);
@@ -637,6 +643,7 @@ fn run_lock_exit_1_for_partial_input() {
         no_witness: true,
         describe: false,
         schema: false,
+        robot_triage: false,
     };
 
     let code = lock::run_lock(&cli);
@@ -655,6 +662,7 @@ fn run_lock_exit_2_for_missing_file() {
         no_witness: true,
         describe: false,
         schema: false,
+        robot_triage: false,
     };
 
     let code = lock::run_lock(&cli);
@@ -677,6 +685,7 @@ fn run_lock_exit_2_for_empty_file() {
         no_witness: true,
         describe: false,
         schema: false,
+        robot_triage: false,
     };
 
     let code = lock::run_lock(&cli);
@@ -703,6 +712,7 @@ fn run_lock_exit_2_for_bad_version() {
         no_witness: true,
         describe: false,
         schema: false,
+        robot_triage: false,
     };
 
     let code = lock::run_lock(&cli);
@@ -729,6 +739,7 @@ fn run_lock_exit_2_for_missing_hash() {
         no_witness: true,
         describe: false,
         schema: false,
+        robot_triage: false,
     };
 
     let code = lock::run_lock(&cli);
@@ -754,6 +765,7 @@ fn run_lock_exit_2_for_invalid_json() {
         no_witness: true,
         describe: false,
         schema: false,
+        robot_triage: false,
     };
 
     let code = lock::run_lock(&cli);

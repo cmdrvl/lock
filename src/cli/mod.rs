@@ -5,7 +5,12 @@ use clap::{Parser, Subcommand};
 /// Dataset lockfile tool: pins artifacts, fingerprints, and tool versions
 /// into a single immutable, self-hashed lockfile.
 #[derive(Debug, Parser)]
-#[command(name = "lock", version, about)]
+#[command(
+    name = "lock",
+    version,
+    about,
+    override_usage = "lock [<INPUT>] [OPTIONS]\n       lock --robot-triage\n       lock capabilities --json\n       lock robot-docs guide\n       lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]\n       lock witness <query|last|count> [OPTIONS]\n       lock doctor <health|capabilities|robot-docs> [OPTIONS]"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -40,12 +45,23 @@ pub struct Cli {
     /// Print lock.v0 JSON Schema and exit
     #[arg(long)]
     pub schema: bool,
+
+    /// Emit one-call machine triage for headless agents
+    #[arg(long = "robot-triage")]
+    pub robot_triage: bool,
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Verify lockfile integrity and optionally member content
     Verify(VerifyArgs),
+    /// Print the machine-readable lock capability contract
+    Capabilities(TopLevelCapabilitiesArgs),
+    /// Print paste-ready operating notes for agents
+    RobotDocs {
+        #[command(subcommand)]
+        action: Option<RobotDocsAction>,
+    },
     /// Query the witness ledger
     Witness {
         #[command(subcommand)]
@@ -56,12 +72,28 @@ pub enum Command {
         /// Emit machine-readable triage JSON for agents
         #[arg(long = "robot-triage")]
         robot_triage: bool,
+        /// Refuse safely; repair mode is not available in this release
+        #[arg(long, hide = true)]
+        fix: bool,
         /// Output health as JSON when no doctor subcommand is provided
         #[arg(long)]
         json: bool,
         #[command(subcommand)]
         action: Option<DoctorAction>,
     },
+}
+
+#[derive(Debug, clap::Args)]
+pub struct TopLevelCapabilitiesArgs {
+    /// Output JSON
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RobotDocsAction {
+    /// Print the agent operating guide
+    Guide,
 }
 
 #[derive(Debug, Subcommand)]
@@ -179,16 +211,26 @@ pub fn run() -> u8 {
     if cli.schema {
         return dispatch_schema();
     }
+    if cli.robot_triage {
+        return crate::doctor::dispatch_robot_triage();
+    }
 
     // Subcommands dispatch after display-mode short-circuits.
     match &cli.command {
         Some(Command::Verify(args)) => return dispatch_verify(args),
+        Some(Command::Capabilities(args)) => {
+            return crate::doctor::dispatch_capabilities(args.json);
+        }
+        Some(Command::RobotDocs { action }) => {
+            return crate::doctor::dispatch_robot_docs(action.as_ref());
+        }
         Some(Command::Witness { action }) => return dispatch_witness(action),
         Some(Command::Doctor {
             robot_triage,
+            fix,
             json,
             action,
-        }) => return crate::doctor::dispatch(*robot_triage, *json, action.as_ref()),
+        }) => return crate::doctor::dispatch(*robot_triage, *fix, *json, action.as_ref()),
         None => {}
     }
 
@@ -254,6 +296,7 @@ mod tests {
         assert!(!cli.no_witness);
         assert!(!cli.describe);
         assert!(!cli.schema);
+        assert!(!cli.robot_triage);
     }
 
     #[test]
@@ -297,6 +340,41 @@ mod tests {
     fn parse_schema_flag() {
         let cli = Cli::try_parse_from(["lock", "--schema"]).unwrap();
         assert!(cli.schema);
+    }
+
+    #[test]
+    fn parse_top_level_robot_triage() {
+        let cli = Cli::try_parse_from(["lock", "--robot-triage"]).unwrap();
+        assert!(cli.robot_triage);
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn parse_top_level_capabilities_json() {
+        let cli = Cli::try_parse_from(["lock", "capabilities", "--json"]).unwrap();
+        assert!(
+            matches!(&cli.command, Some(Command::Capabilities(_))),
+            "expected top-level Capabilities, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Capabilities(args)) = &cli.command {
+            assert!(args.json);
+        }
+    }
+
+    #[test]
+    fn parse_top_level_robot_docs_guide() {
+        let cli = Cli::try_parse_from(["lock", "robot-docs", "guide"]).unwrap();
+        assert!(
+            matches!(
+                &cli.command,
+                Some(Command::RobotDocs {
+                    action: Some(RobotDocsAction::Guide),
+                })
+            ),
+            "expected top-level RobotDocs/Guide, got {:?}",
+            cli.command
+        );
     }
 
     #[test]
@@ -497,11 +575,13 @@ mod tests {
         );
         if let Some(Command::Doctor {
             robot_triage,
+            fix,
             json,
             action: Some(DoctorAction::Health { json: health_json }),
         }) = &cli.command
         {
             assert!(!robot_triage);
+            assert!(!fix);
             assert!(!json);
             assert!(*health_json);
         }
@@ -517,12 +597,28 @@ mod tests {
         );
         if let Some(Command::Doctor {
             robot_triage,
+            fix,
             json,
             action,
         }) = &cli.command
         {
             assert!(*robot_triage);
+            assert!(!fix);
             assert!(!json);
+            assert!(action.is_none());
+        }
+    }
+
+    #[test]
+    fn parse_doctor_fix_safe_refusal_flag() {
+        let cli = Cli::try_parse_from(["lock", "doctor", "--fix"]).unwrap();
+        assert!(
+            matches!(&cli.command, Some(Command::Doctor { .. })),
+            "expected Doctor fix flag, got {:?}",
+            cli.command
+        );
+        if let Some(Command::Doctor { fix, action, .. }) = &cli.command {
+            assert!(*fix);
             assert!(action.is_none());
         }
     }

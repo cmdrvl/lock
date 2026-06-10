@@ -22,6 +22,11 @@ vacuum /data/dec | hashbytes | lock --dataset-id "raw-dec" > raw.lock.json
 vacuum /data | hashbytes | fingerprint --fp csv.v0 \
   | lock --dataset-id "dec" > dec.lock.json
 
+# Agent discovery
+lock --robot-triage
+lock capabilities --json
+lock robot-docs guide
+
 # Quality gate
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
@@ -38,6 +43,7 @@ cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 | `src/main.rs` | CLI entry + exit code mapping |
 | `src/lib.rs` | Orchestration flow |
 | `src/cli/` | Argument parsing and witness subcommands |
+| `src/doctor.rs` | Read-only agent/operator discovery and diagnostics |
 | `src/input/` | JSONL parsing and field extraction |
 | `src/lockfile/` | Member/skipped construction + sorting |
 | `src/lockfile/self_hash.rs` | Canonical serialization + SHA256 |

@@ -91,6 +91,12 @@ This distinguishes it from:
 
 ```bash
 lock [<INPUT>] [OPTIONS]
+lock --robot-triage
+lock capabilities --json
+lock robot-docs guide
+lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]
+lock doctor <health|capabilities|robot-docs> [OPTIONS]
+lock doctor --robot-triage
 lock witness <query|last|count> [OPTIONS]
 ```
 
@@ -107,6 +113,7 @@ lock witness <query|last|count> [OPTIONS]
 - `--describe`: print the compiled-in `operator.json` to stdout and exit 0. Checked before input is validated, so `lock --describe` works with no arguments.
 - `--schema`: print the JSON Schema for `lock.v0` output to stdout and exit 0. Like `--describe`, checked before input is validated.
 - `--version`: print `lock <semver>` to stdout and exit 0.
+- `--robot-triage`: emit one-call read-only machine triage JSON for agents and exit 0.
 
 ### Exit codes
 
@@ -145,6 +152,28 @@ lock witness count [--tool <name>] [--since <iso8601>] [--until <iso8601>] \
 ```
 
 `lock witness` is read/query-only. It does not mutate ledger state.
+
+---
+
+## Agent and doctor discovery surfaces
+
+The main lock creation path remains an artifact-producing pipeline command. Discovery commands are deliberately separate and read-only:
+
+```bash
+lock --robot-triage
+lock capabilities --json
+lock robot-docs guide
+lock doctor health
+lock doctor health --json
+lock doctor capabilities --json
+lock doctor robot-docs
+lock doctor --robot-triage
+lock doctor --fix
+```
+
+`lock --robot-triage`, `lock capabilities --json`, `lock robot-docs guide`, and all `lock doctor` commands do not read stdin or input JSONL, create lockfiles, verify member content, append witness records, create witness directories, write doctor artifacts, rewrite metadata, or use the network.
+
+No repair mode is available in this release. `lock doctor --fix` is a safe refusal: exit 2, empty stdout, and stderr that names `lock --robot-triage`, `lock capabilities --json`, and `lock robot-docs guide`.
 
 ---
 
@@ -493,8 +522,8 @@ For lock, `inputs` describes the JSONL source: `"stdin"` when piped, or the file
 
 ```
  1. Parse CLI (clap)           → exit 2 on bad args; --version handled here by clap
- 2. If witness subcommand: dispatch to witness query/last/count, exit
- 3. If --describe / --schema: emit and exit 0
+ 2. If --describe / --schema / --robot-triage: emit and exit 0
+ 3. If capabilities, robot-docs, doctor, verify, or witness subcommand: dispatch and exit
  4. Open input (file or stdin)
  5. For each JSONL line:
     a. Parse JSON → on parse failure: refuse E_BAD_INPUT immediately
@@ -604,15 +633,34 @@ pub struct Cli {
     /// Print JSON Schema and exit
     #[arg(long)]
     pub schema: bool,
+
+    /// Emit one-call machine triage and exit
+    #[arg(long = "robot-triage")]
+    pub robot_triage: bool,
 }
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Print the machine-readable capability contract
+    Capabilities(TopLevelCapabilitiesArgs),
+
+    /// Print paste-ready operating notes for agents
+    RobotDocs {
+        #[command(subcommand)]
+        action: Option<RobotDocsAction>,
+    },
+
+    /// Verify lockfile integrity and optionally member content
+    Verify(VerifyArgs),
+
     /// Query the witness ledger
     Witness {
         #[command(subcommand)]
         action: WitnessAction,
     },
+
+    /// Run read-only diagnostics for agents and operators
+    Doctor(DoctorArgs),
 }
 
 #[derive(Subcommand)]
@@ -643,6 +691,7 @@ lock/
 │   ├── lib.rs           # pub fn run() → u8 (handles errors internally, returns exit code)
 │   ├── cli/
 │   │   └── mod.rs       # clap derive Cli / Command / WitnessAction
+│   ├── doctor.rs        # Read-only agent/operator discovery and diagnostics
 │   ├── input/
 │   │   └── mod.rs       # JSONL reader, record parsing, field extraction
 │   ├── lockfile/

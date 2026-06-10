@@ -1,0 +1,6 @@
+{"surface_id":"verb__lock","kind":"verb","name":"lock","runtime":{"invocation":"lock --help","exit_code":0},"description":"top-level binary; artifact creation path remains unchanged"}
+{"surface_id":"flag__global__robot-triage","kind":"flag","name":"--robot-triage","runtime":{"invocation":"lock --robot-triage","exit_code":0},"description":"one-call read-only JSON triage"}
+{"surface_id":"verb__capabilities","kind":"verb","name":"capabilities","runtime":{"invocation":"lock capabilities --json","exit_code":0},"description":"machine-readable capability contract"}
+{"surface_id":"verb__robot-docs_guide","kind":"verb","name":"robot-docs guide","runtime":{"invocation":"lock robot-docs guide","exit_code":0},"description":"agent operating guide"}
+{"surface_id":"verb__doctor","kind":"verb","name":"doctor","runtime":{"invocation":"lock doctor --help","exit_code":0},"description":"nested read-only diagnostics namespace"}
+{"surface_id":"flag__doctor__fix","kind":"flag","name":"--fix","runtime":{"invocation":"lock doctor --fix","exit_code":2},"description":"safe refusal; no repair mode available"}

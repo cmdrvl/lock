@@ -227,6 +227,10 @@ cargo build --release
 
 ```bash
 lock [<INPUT>] [OPTIONS]
+lock --robot-triage
+lock capabilities --json
+lock robot-docs guide
+lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]
 lock doctor <health|capabilities|robot-docs> [OPTIONS]
 lock doctor --robot-triage
 lock witness <query|last|count> [OPTIONS]
@@ -246,12 +250,16 @@ lock witness <query|last|count> [OPTIONS]
 | `--no-witness` | flag | `false` | Suppress witness ledger recording for this run |
 | `--describe` | flag | `false` | Print compiled `operator.json` to stdout, exit `0` |
 | `--schema` | flag | `false` | Print lock JSON schema, exit `0` |
+| `--robot-triage` | flag | `false` | Emit read-only machine triage JSON, exit `0` |
 
 ### Doctor Mode
 
-`lock doctor` is a read-only diagnostic surface for agents and operators. It does not read stdin or input files, create lockfiles, verify member content, append witness records, create witness directories, write `.doctor` artifacts, rewrite metadata, or use the network.
+`lock` exposes read-only diagnostic surfaces for agents and operators. `lock --robot-triage`, `lock capabilities --json`, `lock robot-docs guide`, and `lock doctor` do not read stdin or input files, create lockfiles, verify member content, append witness records, create witness directories, write `.doctor` artifacts, rewrite metadata, or use the network.
 
 ```bash
+lock --robot-triage
+lock capabilities --json
+lock robot-docs guide
 lock doctor health
 lock doctor health --json
 lock doctor capabilities --json
@@ -259,7 +267,7 @@ lock doctor robot-docs
 lock doctor --robot-triage
 ```
 
-There is no fix mode in this release. `lock doctor --fix` is intentionally unavailable until a future fixer has detector, backup, inverse, and fixture coverage.
+There is no fix mode in this release. `lock doctor --fix` exits `2`, emits only stderr, and names the read-only alternatives until a future fixer has detector, backup, inverse, and fixture coverage.
 
 ### Exit Codes
 
@@ -423,6 +431,9 @@ stored_hash=$(jq -r '.lock_hash' dec.lock.json)
 - **Refusals have `next_command`** — an agent can read and retry with the suggested fix
 - **`--describe`** — prints `operator.json` so an agent discovers the tool without reading docs
 - **`--schema`** — prints the lockfile JSON schema for programmatic validation
+- **`--robot-triage`** — returns health and capability metadata in one JSON call
+- **`capabilities --json`** — describes command surfaces, side effects, and the repair policy
+- **`robot-docs guide`** — prints paste-ready operating notes without external docs
 
 ---
 

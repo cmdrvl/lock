@@ -200,6 +200,7 @@ mod tests {
             no_witness: false,
             describe: false,
             schema: false,
+            robot_triage: false,
         }
     }
 

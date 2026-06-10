@@ -1,0 +1,4 @@
+{"intent":"Get machine-readable health and capabilities in one call","pre_command":"lock --robot-triage","pre_result":"generic clap error","post_command":"lock --robot-triage","post_result":"lock.doctor.triage.v1 JSON"}
+{"intent":"Discover the command contract without reading docs","pre_command":"lock capabilities --json","pre_result":"parsed capabilities as input, then rejected --json","post_command":"lock capabilities --json","post_result":"lock.doctor.capabilities.v1 JSON"}
+{"intent":"Read the agent guide from the binary","pre_command":"lock robot-docs guide","pre_result":"parsed robot-docs as input","post_command":"lock robot-docs guide","post_result":"markdown guide"}
+{"intent":"Ask doctor to repair but avoid mutation","pre_command":"lock doctor --fix","pre_result":"generic clap error","post_command":"lock doctor --fix","post_result":"safe stderr refusal with exact alternatives"}

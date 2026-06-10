@@ -1,6 +1,9 @@
 use serde_json::{Value, json};
 
-use crate::{cli::DoctorAction, witness::resolve_ledger_path};
+use crate::{
+    cli::{DoctorAction, RobotDocsAction},
+    witness::resolve_ledger_path,
+};
 
 const HEALTH_SCHEMA_VERSION: &str = "lock.doctor.health.v1";
 const CAPABILITIES_SCHEMA_VERSION: &str = "lock.doctor.capabilities.v1";
@@ -11,22 +14,44 @@ const OPERATOR_JSON: &str = include_str!("../operator.json");
 const LOCK_SCHEMA: &str = include_str!("../schemas/lock-v0.schema.json");
 const VERIFY_SCHEMA: &str = include_str!("../schemas/lock-verify-v0.schema.json");
 
-pub fn dispatch(robot_triage: bool, json_mode: bool, action: Option<&DoctorAction>) -> u8 {
+pub fn dispatch(
+    robot_triage: bool,
+    fix: bool,
+    json_mode: bool,
+    action: Option<&DoctorAction>,
+) -> u8 {
+    if fix {
+        return fix_unavailable();
+    }
+
     if robot_triage {
-        let report = triage_report();
-        print_json(&report);
-        return exit_for_report(report.get("health").unwrap_or(&Value::Null));
+        return dispatch_robot_triage();
     }
 
     match action {
         Some(DoctorAction::Health { json }) => render_health(*json || json_mode),
         Some(DoctorAction::Capabilities { json }) => render_capabilities(*json || json_mode),
         Some(DoctorAction::RobotDocs) => {
-            print_robot_docs();
+            print_robot_docs(None);
             0
         }
         None => render_health(json_mode),
     }
+}
+
+pub fn dispatch_robot_triage() -> u8 {
+    let report = triage_report();
+    print_json(&report);
+    exit_for_report(report.get("health").unwrap_or(&Value::Null))
+}
+
+pub fn dispatch_capabilities(json_mode: bool) -> u8 {
+    render_capabilities(json_mode)
+}
+
+pub fn dispatch_robot_docs(action: Option<&RobotDocsAction>) -> u8 {
+    print_robot_docs(action);
+    0
 }
 
 fn render_health(json_mode: bool) -> u8 {
@@ -85,6 +110,58 @@ fn capabilities_report() -> Value {
             "required": false,
             "used": false
         },
+        "online_default": false,
+        "agent_surfaces": {
+            "lock_creation": {
+                "command": "lock [<INPUT>] [OPTIONS]",
+                "output": "lock.v0 artifact JSON or REFUSAL envelope",
+                "mutates": true,
+                "notes": "May append a witness record by default and may write the lockfile when --output is provided."
+            },
+            "verify": {
+                "command": "lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]",
+                "output": "human text or lock-verify.v0 JSON depending on --json",
+                "mutates": true,
+                "notes": "May append a witness record unless --no-witness is provided."
+            },
+            "robot_triage": {
+                "command": "lock --robot-triage",
+                "output": "lock.doctor.triage.v1 JSON diagnostic report",
+                "mutates": false
+            },
+            "capabilities": {
+                "command": "lock capabilities --json",
+                "output": "lock.doctor.capabilities.v1 JSON capability contract",
+                "mutates": false
+            },
+            "robot_docs": {
+                "command": "lock robot-docs guide",
+                "output": "agent-oriented markdown guide",
+                "mutates": false
+            },
+            "doctor_namespace": {
+                "commands": [
+                    "lock doctor health",
+                    "lock doctor health --json",
+                    "lock doctor capabilities --json",
+                    "lock doctor robot-docs",
+                    "lock doctor --robot-triage",
+                    "lock doctor --fix"
+                ],
+                "status": "available"
+            }
+        },
+        "lock_capabilities": {
+            "formats": ["jsonl", "json"],
+            "artifact_tool": true,
+            "self_hashed_lockfiles": true,
+            "verify_self_hash": true,
+            "verify_member_content": true,
+            "operator_describe": true,
+            "schema_describe": true,
+            "witness_query": true,
+            "streaming": false
+        },
         "side_effects": {
             "reads_stdin": false,
             "reads_input_jsonl": false,
@@ -97,9 +174,80 @@ fn capabilities_report() -> Value {
             "writes_doctor_artifacts": false,
             "rewrites_operator_manifest": false,
             "rewrites_schema": false,
-            "uses_network": false
+            "uses_network": false,
+            "by_command": {
+                "lock --robot-triage": {
+                    "reads_stdin": false,
+                    "reads_input_jsonl": false,
+                    "reads_lockfiles": false,
+                    "verifies_member_content": false,
+                    "creates_lockfiles": false,
+                    "writes_output_files": false,
+                    "writes_witness_ledger": false,
+                    "creates_witness_directory": false,
+                    "writes_doctor_artifacts": false,
+                    "uses_network": false
+                },
+                "lock capabilities --json": {
+                    "reads_stdin": false,
+                    "reads_input_jsonl": false,
+                    "reads_lockfiles": false,
+                    "verifies_member_content": false,
+                    "creates_lockfiles": false,
+                    "writes_output_files": false,
+                    "writes_witness_ledger": false,
+                    "creates_witness_directory": false,
+                    "writes_doctor_artifacts": false,
+                    "uses_network": false
+                },
+                "lock robot-docs guide": {
+                    "reads_stdin": false,
+                    "reads_input_jsonl": false,
+                    "reads_lockfiles": false,
+                    "verifies_member_content": false,
+                    "creates_lockfiles": false,
+                    "writes_output_files": false,
+                    "writes_witness_ledger": false,
+                    "creates_witness_directory": false,
+                    "writes_doctor_artifacts": false,
+                    "uses_network": false
+                },
+                "lock doctor --fix": {
+                    "available": false,
+                    "reads_stdin": false,
+                    "reads_input_jsonl": false,
+                    "reads_lockfiles": false,
+                    "verifies_member_content": false,
+                    "creates_lockfiles": false,
+                    "writes_output_files": false,
+                    "writes_witness_ledger": false,
+                    "creates_witness_directory": false,
+                    "writes_doctor_artifacts": false,
+                    "uses_network": false
+                }
+            }
         },
         "commands": [
+            {
+                "command": "lock --robot-triage",
+                "description": "Emit health and capabilities in one robot-readable report."
+            },
+            {
+                "command": "lock capabilities --json",
+                "description": "Describe agent-facing command surfaces and mutation policy."
+            },
+            {
+                "command": "lock robot-docs guide",
+                "description": "Print agent-oriented usage notes."
+            },
+            {
+                "command": "lock [<INPUT>] [OPTIONS]",
+                "description": "Create a self-hashed lock.v0 artifact from upstream JSONL."
+            },
+            {
+                "command": "lock verify <LOCKFILE> --json",
+                "description": "Verify lockfile integrity and optionally member content."
+            },
             {
                 "command": "lock doctor health",
                 "json": "lock doctor health --json",
@@ -116,6 +264,10 @@ fn capabilities_report() -> Value {
             {
                 "command": "lock doctor --robot-triage",
                 "description": "Emit health and capabilities in one robot-readable report."
+            },
+            {
+                "command": "lock doctor --fix",
+                "description": "Refuse safely; fix mode is not available in this release."
             }
         ],
         "detectors": [
@@ -152,8 +304,10 @@ fn capabilities_report() -> Value {
             "doctor_stderr": "unused on successful doctor commands"
         },
         "fix_mode": {
+            "available": false,
             "status": "not_available",
-            "command": null,
+            "command": "lock doctor --fix",
+            "behavior": "exits 2, emits only stderr, and names read-only alternatives",
             "reason": "No lock fixer has detector, backup, inverse, and fixture coverage yet."
         },
         "fixers": []
@@ -407,21 +561,32 @@ fn print_capabilities_human(report: &Value) {
     }
 }
 
-fn print_robot_docs() {
-    println!("# lock doctor robot docs");
+fn print_robot_docs(action: Option<&RobotDocsAction>) {
+    match action {
+        Some(RobotDocsAction::Guide) | None => {}
+    }
+
+    println!("# lock robot-docs guide");
     println!();
-    println!("`lock doctor` is a read-only diagnostic surface for agents.");
+    println!("`lock` exposes read-only discovery surfaces for agents.");
     println!(
-        "It does not read stdin or input files, create lockfiles, verify member content, append witness records, create witness directories, write doctor artifacts, rewrite metadata, or use the network."
+        "`lock --robot-triage`, `lock capabilities --json`, `lock robot-docs guide`, and `lock doctor` do not read stdin or input files, create lockfiles, verify member content, append witness records, create witness directories, write doctor artifacts, rewrite metadata, or use the network."
     );
     println!();
     println!("Commands:");
+    println!("- `lock --robot-triage` for a single JSON triage payload.");
+    println!("- `lock capabilities --json` for command and side-effect policy.");
+    println!("- `lock robot-docs guide` for this agent-oriented guide.");
+    println!("- `lock [<INPUT>] [OPTIONS]` to create a lock.v0 artifact.");
+    println!("- `lock verify <LOCKFILE> --json` to verify lockfile integrity.");
     println!("- `lock doctor health` for human health output.");
     println!("- `lock doctor health --json` for machine-readable health.");
     println!("- `lock doctor capabilities --json` for command and side-effect policy.");
     println!("- `lock doctor --robot-triage` for a single JSON triage payload.");
     println!();
-    println!("No fix mode is available. `lock doctor --fix` is intentionally unsupported.");
+    println!(
+        "Repair policy: `lock doctor --fix` is unavailable and exits 2 without stdout. Use `lock --robot-triage`, `lock capabilities --json`, or `lock robot-docs guide` for read-only diagnostics."
+    );
 }
 
 fn print_json(value: &Value) {
@@ -429,6 +594,21 @@ fn print_json(value: &Value) {
         "{}",
         serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
     );
+}
+
+fn fix_unavailable() -> u8 {
+    use std::io::Write;
+
+    let mut stderr = std::io::stderr();
+    let _ = writeln!(
+        stderr,
+        "lock doctor --fix is unavailable: diagnostics are read-only in this release."
+    );
+    let _ = writeln!(stderr, "Try --robot-triage: lock --robot-triage");
+    let _ = writeln!(stderr, "Try capabilities --json: lock capabilities --json");
+    let _ = writeln!(stderr, "Try robot-docs guide: lock robot-docs guide");
+    let _ = stderr.flush();
+    2
 }
 
 fn exit_for_report(report: &Value) -> u8 {

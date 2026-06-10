@@ -74,6 +74,9 @@ jobs:
 
       - name: Smoke doctor surface
         run: |
+          cargo run --locked -- --robot-triage
+          cargo run --locked -- capabilities --json
+          cargo run --locked -- robot-docs guide
           cargo run --locked -- doctor health
           cargo run --locked -- doctor capabilities --json
           cargo run --locked -- doctor robot-docs
@@ -326,11 +329,20 @@ jobs:
           linux_sha=$(grep "x86_64-unknown-linux-gnu" SHA256SUMS | awk '{print $1}')
           linux_arm_sha=$(grep "aarch64-unknown-linux-gnu" SHA256SUMS | awk '{print $1}')
 
+          for checksum_name in macos_arm_sha macos_intel_sha linux_sha linux_arm_sha; do
+            if [[ -z "${!checksum_name}" ]]; then
+              echo "Missing checksum for ${checksum_name} in SHA256SUMS"
+              exit 1
+            fi
+          done
+
           cat > lock.rb <<FORMULA
+          # typed: false
+          # frozen_string_literal: true
+
           class Lock < Formula
             desc "Pin artifacts, fingerprints, and tool versions into a self-hashed dataset lockfile"
             homepage "https://github.com/${repo}"
-            version "${version}"
             license "MIT"
 
             on_macos do
@@ -358,7 +370,7 @@ jobs:
             end
 
             test do
-              assert_match "lock ${version}", shell_output("#{bin}/lock --version")
+              assert_match version.to_s, shell_output("#{bin}/lock --version")
             end
           end
           FORMULA

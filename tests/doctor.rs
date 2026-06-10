@@ -61,7 +61,20 @@ fn doctor_capabilities_json_advertises_no_fixers() {
     assert_eq!(report["side_effects"]["writes_witness_ledger"], false);
     assert_eq!(report["side_effects"]["reads_stdin"], false);
     assert_eq!(report["side_effects"]["creates_lockfiles"], false);
+    assert_eq!(
+        report["agent_surfaces"]["capabilities"]["command"],
+        "lock capabilities --json"
+    );
+    assert_eq!(
+        report["agent_surfaces"]["robot_docs"]["command"],
+        "lock robot-docs guide"
+    );
+    assert_eq!(
+        report["side_effects"]["by_command"]["lock capabilities --json"]["uses_network"],
+        false
+    );
     assert_eq!(report["fix_mode"]["status"], "not_available");
+    assert_eq!(report["fix_mode"]["available"], false);
     assert_eq!(report["fixers"], serde_json::json!([]));
 }
 
@@ -88,6 +101,80 @@ fn doctor_robot_triage_json_is_machine_readable() {
 }
 
 #[test]
+fn top_level_robot_triage_json_is_machine_readable() {
+    let home = TempDir::new().expect("temp home should be created");
+    let witness_path = home.path().join("witness.jsonl");
+    let output = isolated_command(home.path(), &witness_path)
+        .arg("--robot-triage")
+        .output()
+        .expect("lock robot triage should run");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "stderr should remain empty");
+    assert!(
+        !witness_path.exists(),
+        "robot triage must not append or create the witness ledger"
+    );
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("robot triage should emit JSON");
+
+    assert_eq!(report["schema_version"], "lock.doctor.triage.v1");
+    assert_eq!(report["ok"], true);
+    assert_eq!(
+        report["capabilities"]["agent_surfaces"]["robot_triage"]["command"],
+        "lock --robot-triage"
+    );
+}
+
+#[test]
+fn top_level_capabilities_json_advertises_agent_surfaces() {
+    let home = TempDir::new().expect("temp home should be created");
+    let witness_path = home.path().join("witness.jsonl");
+    let output = isolated_command(home.path(), &witness_path)
+        .args(["capabilities", "--json"])
+        .output()
+        .expect("lock capabilities should run");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "stderr should remain empty");
+    let report: Value =
+        serde_json::from_slice(&output.stdout).expect("capabilities should emit JSON");
+
+    assert_eq!(report["schema_version"], "lock.doctor.capabilities.v1");
+    assert_eq!(report["read_only"], true);
+    assert_eq!(
+        report["agent_surfaces"]["capabilities"]["command"],
+        "lock capabilities --json"
+    );
+    assert_eq!(
+        report["agent_surfaces"]["robot_docs"]["command"],
+        "lock robot-docs guide"
+    );
+    assert_eq!(
+        report["side_effects"]["by_command"]["lock capabilities --json"]["writes_witness_ledger"],
+        false
+    );
+}
+
+#[test]
+fn top_level_robot_docs_guide_names_agent_surface() {
+    let home = TempDir::new().expect("temp home should be created");
+    let witness_path = home.path().join("witness.jsonl");
+    let output = isolated_command(home.path(), &witness_path)
+        .args(["robot-docs", "guide"])
+        .output()
+        .expect("lock robot docs should run");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(output.stderr.is_empty(), "stderr should remain empty");
+    let stdout = String::from_utf8(output.stdout).expect("stdout should be utf-8");
+    assert!(stdout.contains("lock --robot-triage"));
+    assert!(stdout.contains("lock capabilities --json"));
+    assert!(stdout.contains("lock robot-docs guide"));
+    assert!(stdout.contains("lock doctor --fix` is unavailable"));
+}
+
+#[test]
 fn doctor_fix_is_not_available() {
     let home = TempDir::new().expect("temp home should be created");
     let witness_path = home.path().join("witness.jsonl");
@@ -99,13 +186,13 @@ fn doctor_fix_is_not_available() {
     assert_eq!(output.status.code(), Some(2));
     assert!(
         output.stdout.is_empty(),
-        "unknown doctor flags should not emit stdout"
+        "safe fix refusal should not emit stdout"
     );
     let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
-    assert!(
-        stderr.contains("unexpected argument '--fix'"),
-        "stderr should explain that --fix is unavailable: {stderr}"
-    );
+    assert!(stderr.contains("lock doctor --fix is unavailable"));
+    assert!(stderr.contains("lock --robot-triage"));
+    assert!(stderr.contains("lock capabilities --json"));
+    assert!(stderr.contains("lock robot-docs guide"));
     assert!(
         !witness_path.exists(),
         "unavailable fix mode must not create witness state"

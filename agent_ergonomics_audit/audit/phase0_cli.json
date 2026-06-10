@@ -1,0 +1,17 @@
+{
+  "target_path": "/Users/zac/Source/cmdrvl/lock",
+  "discovered_at": "2026-06-10T05:59:36Z",
+  "languages": [
+    "rust"
+  ],
+  "binaries": [
+    "lock"
+  ],
+  "env_var_prefix": "LOCK",
+  "existing_surfaces": {
+    "robot_mode": true,
+    "capabilities": true,
+    "robot_docs": true
+  },
+  "recommended_mode": "audit-only"
+}
