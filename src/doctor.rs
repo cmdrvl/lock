@@ -162,6 +162,31 @@ fn capabilities_report() -> Value {
             "witness_query": true,
             "streaming": false
         },
+        "composition": {
+            "family": {
+                "name": "cmdrvl-spine",
+                "siblings": [
+                    {"tool": "vacuum", "capabilities": "vacuum capabilities --json"},
+                    {"tool": "hashbytes", "capabilities": "hashbytes capabilities --json"},
+                    {"tool": "fingerprint", "capabilities": "fingerprint capabilities --json"},
+                    {"tool": "lock", "capabilities": "lock capabilities --json"},
+                    {"tool": "pack", "capabilities": "pack capabilities --json"}
+                ]
+            },
+            "role": "artifact boundary; pin upstream JSONL evidence into a self-hashed lock.v0 file",
+            "position": 4,
+            "accepts": ["vacuum.v0 JSONL", "hash.v0 JSONL", "fingerprint.v0 JSONL"],
+            "produces": ["lock.v0 JSON"],
+            "canonical_chain": [
+                "vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID> | lock --dataset-id <DATASET> > dataset.lock.json",
+                "pack seal dataset.lock.json --output evidence/<DATASET>/"
+            ],
+            "agent_rules": [
+                "Use lock after upstream tools have emitted versioned JSONL records.",
+                "Use pack seal, not lock, when the input is already a standalone artifact.",
+                "Pass --no-witness for deterministic read-side smoke tests."
+            ]
+        },
         "side_effects": {
             "reads_stdin": false,
             "reads_input_jsonl": false,
@@ -583,6 +608,17 @@ fn print_robot_docs(action: Option<&RobotDocsAction>) {
     println!("- `lock doctor health --json` for machine-readable health.");
     println!("- `lock doctor capabilities --json` for command and side-effect policy.");
     println!("- `lock doctor --robot-triage` for a single JSON triage payload.");
+    println!();
+    println!("Composition:");
+    println!(
+        "- Canonical chain: `vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID> | lock --dataset-id <DATASET> > dataset.lock.json`."
+    );
+    println!(
+        "- `lock` consumes versioned JSONL from vacuum, hashbytes, or fingerprint and emits one `lock.v0` JSON artifact."
+    );
+    println!(
+        "- Use `pack seal dataset.lock.json --output evidence/<DATASET>/` to seal the lockfile and related reports."
+    );
     println!();
     println!(
         "Repair policy: `lock doctor --fix` is unavailable and exits 2 without stdout. Use `lock --robot-triage`, `lock capabilities --json`, or `lock robot-docs guide` for read-only diagnostics."

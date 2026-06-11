@@ -150,6 +150,14 @@ fn top_level_capabilities_json_advertises_agent_surfaces() {
         report["agent_surfaces"]["robot_docs"]["command"],
         "lock robot-docs guide"
     );
+    assert_eq!(report["composition"]["family"]["name"], "cmdrvl-spine");
+    assert_eq!(report["composition"]["position"], 4);
+    assert_eq!(report["composition"]["produces"][0], "lock.v0 JSON");
+    assert!(
+        report["composition"]["accepts"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value == "fingerprint.v0 JSONL"))
+    );
     assert_eq!(
         report["side_effects"]["by_command"]["lock capabilities --json"]["writes_witness_ledger"],
         false
@@ -171,6 +179,9 @@ fn top_level_robot_docs_guide_names_agent_surface() {
     assert!(stdout.contains("lock --robot-triage"));
     assert!(stdout.contains("lock capabilities --json"));
     assert!(stdout.contains("lock robot-docs guide"));
+    assert!(stdout.contains("Composition:"));
+    assert!(stdout.contains("vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID>"));
+    assert!(stdout.contains("pack seal dataset.lock.json --output evidence/<DATASET>/"));
     assert!(stdout.contains("lock doctor --fix` is unavailable"));
 }
 
