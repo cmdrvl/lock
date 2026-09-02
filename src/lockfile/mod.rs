@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -17,7 +17,7 @@ pub struct Lockfile {
     pub note: Option<String>,
     pub created: String,
     pub tool_versions: BTreeMap<String, String>,
-    pub profiles: Vec<String>,
+    pub profiles: Vec<ProfileEntry>,
     pub skipped: Vec<SkippedEntry>,
     pub members: Vec<Member>,
     pub skipped_count: u64,
@@ -38,6 +38,14 @@ pub struct FingerprintResult {
     pub fingerprint_version: String,
     pub matched: bool,
     pub content_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct ProfileEntry {
+    pub profile_id: String,
+    pub profile_sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column_registry_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -75,7 +83,7 @@ pub struct MetadataHydration {
     pub dataset_id: Option<String>,
     pub as_of: Option<String>,
     pub note: Option<String>,
-    pub profiles: Vec<String>,
+    pub profiles: Vec<ProfileEntry>,
     pub tool_versions: BTreeMap<String, String>,
 }
 
@@ -85,13 +93,7 @@ pub fn classify_records(records: &[InputRecord]) -> Result<Classification, Class
 
     for record in records {
         let path = extract_record_path(&record.value, record.line_number)?;
-        let is_skipped = record
-            .value
-            .get("_skipped")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-
-        if is_skipped {
+        if is_skipped_record(&record.value) {
             skipped.push(SkippedEntry {
                 path,
                 warnings: extract_warnings(&record.value),
@@ -153,9 +155,30 @@ pub fn hydrate_metadata(
         dataset_id: dataset_id.map(str::to_owned),
         as_of: as_of.map(str::to_owned),
         note: note.map(str::to_owned),
-        profiles: Vec::new(),
+        profiles: collect_profiles(records),
         tool_versions: merge_tool_versions(records, lock_version),
     }
+}
+
+pub fn collect_profiles(records: &[InputRecord]) -> Vec<ProfileEntry> {
+    let mut profiles = BTreeSet::new();
+
+    for record in records {
+        if is_skipped_record(&record.value) {
+            continue;
+        }
+
+        if let Some(profile) = extract_profile_entry(&record.value) {
+            profiles.insert(profile);
+        }
+    }
+
+    profiles.into_iter().collect()
+}
+
+pub fn is_frozen_profile_record(value: &Value) -> bool {
+    value.get("status").and_then(Value::as_str) == Some("frozen")
+        && non_empty_string_field(value, "profile_sha256").is_some()
 }
 
 pub fn merge_tool_versions(
@@ -194,6 +217,33 @@ fn extract_record_path(value: &Value, line_number: usize) -> Result<String, Clas
         .or_else(|| value.get("path").and_then(Value::as_str))
         .map(str::to_owned)
         .ok_or(ClassificationError::MissingPath { line_number })
+}
+
+fn is_skipped_record(value: &Value) -> bool {
+    value
+        .get("_skipped")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn extract_profile_entry(value: &Value) -> Option<ProfileEntry> {
+    if !is_frozen_profile_record(value) {
+        return None;
+    }
+
+    Some(ProfileEntry {
+        profile_id: non_empty_string_field(value, "profile_id")?.to_owned(),
+        profile_sha256: non_empty_string_field(value, "profile_sha256")?.to_owned(),
+        column_registry_hash: non_empty_string_field(value, "column_registry_hash")
+            .map(str::to_owned),
+    })
+}
+
+fn non_empty_string_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|field| !field.trim().is_empty())
 }
 
 fn extract_fingerprint(value: &Value) -> Option<FingerprintResult> {
@@ -263,7 +313,10 @@ fn extract_warning_detail(value: Option<&Value>) -> BTreeMap<String, String> {
 mod tests {
     use serde_json::json;
 
-    use super::{ClassificationError, classify_records, hydrate_metadata, merge_tool_versions};
+    use super::{
+        ClassificationError, ProfileEntry, classify_records, collect_profiles, hydrate_metadata,
+        is_frozen_profile_record, merge_tool_versions,
+    };
     use crate::input::InputRecord;
     use crate::output::DomainOutcome;
 
@@ -536,5 +589,105 @@ mod tests {
             metadata.tool_versions.get("lock"),
             Some(&"0.1.0".to_owned())
         );
+    }
+
+    #[test]
+    fn collect_profiles_extracts_frozen_profiles_with_optional_registry_hash() {
+        let records = vec![
+            InputRecord {
+                line_number: 1,
+                value: json!({
+                    "version": "hash.v0",
+                    "relative_path": "profiles/z.yaml",
+                    "bytes_hash": "sha256:z",
+                    "size": 10,
+                    "status": "frozen",
+                    "profile_id": "zeta_profile",
+                    "profile_sha256": "sha256:zzzz",
+                    "column_registry_hash": "blake3:cccc"
+                }),
+            },
+            InputRecord {
+                line_number: 2,
+                value: json!({
+                    "version": "hash.v0",
+                    "relative_path": "profiles/a.yaml",
+                    "bytes_hash": "sha256:a",
+                    "size": 11,
+                    "status": "frozen",
+                    "profile_id": "alpha_profile",
+                    "profile_sha256": "sha256:aaaa"
+                }),
+            },
+            InputRecord {
+                line_number: 3,
+                value: json!({
+                    "version": "hash.v0",
+                    "relative_path": "profiles/duplicate.yaml",
+                    "bytes_hash": "sha256:dup",
+                    "size": 12,
+                    "status": "frozen",
+                    "profile_id": "alpha_profile",
+                    "profile_sha256": "sha256:aaaa"
+                }),
+            },
+            InputRecord {
+                line_number: 4,
+                value: json!({
+                    "_skipped": true,
+                    "version": "hash.v0",
+                    "relative_path": "profiles/skipped.yaml",
+                    "status": "frozen",
+                    "profile_id": "skipped_profile",
+                    "profile_sha256": "sha256:ssss"
+                }),
+            },
+            InputRecord {
+                line_number: 5,
+                value: json!({
+                    "version": "hash.v0",
+                    "relative_path": "profiles/draft.yaml",
+                    "bytes_hash": "sha256:draft",
+                    "size": 13,
+                    "status": "draft",
+                    "profile_id": "draft_profile",
+                    "profile_sha256": "sha256:dddd",
+                    "column_registry_hash": "blake3:dddd"
+                }),
+            },
+        ];
+
+        let profiles = collect_profiles(&records);
+
+        assert_eq!(
+            profiles,
+            vec![
+                ProfileEntry {
+                    profile_id: "alpha_profile".to_owned(),
+                    profile_sha256: "sha256:aaaa".to_owned(),
+                    column_registry_hash: None,
+                },
+                ProfileEntry {
+                    profile_id: "zeta_profile".to_owned(),
+                    profile_sha256: "sha256:zzzz".to_owned(),
+                    column_registry_hash: Some("blake3:cccc".to_owned()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn frozen_profile_detection_matches_status_and_profile_hash_predicate() {
+        assert!(is_frozen_profile_record(&json!({
+            "status": "frozen",
+            "profile_sha256": "sha256:aaaa"
+        })));
+        assert!(!is_frozen_profile_record(&json!({
+            "status": "draft",
+            "profile_sha256": "sha256:aaaa"
+        })));
+        assert!(!is_frozen_profile_record(&json!({
+            "status": "frozen"
+        })));
     }
 }

@@ -56,9 +56,9 @@
     "profiles": {
       "type": "array",
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/profile_entry"
       },
-      "description": "Deduplicated list of profile IDs. Always empty in v0."
+      "description": "Deduplicated frozen profile identities observed in input records, sorted by profile_id."
     },
     "skipped": {
       "type": "array",
@@ -87,6 +87,25 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "profile_entry": {
+      "type": "object",
+      "required": ["profile_id", "profile_sha256"],
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "description": "Frozen profile identifier declared by the profile file."
+        },
+        "profile_sha256": {
+          "type": "string",
+          "description": "Self-hash declared by the frozen profile."
+        },
+        "column_registry_hash": {
+          "type": "string",
+          "description": "BLAKE3 registry content hash declared by the frozen profile, when present."
+        }
+      },
+      "additionalProperties": false
+    },
     "member": {
       "type": "object",
       "required": ["path", "bytes_hash", "size", "fingerprint"],

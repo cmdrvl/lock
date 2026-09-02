@@ -161,7 +161,7 @@ fn lock_created_nullable_fields_are_null_when_omitted() {
 }
 
 #[test]
-fn lock_created_profiles_always_empty_in_v0() {
+fn lock_created_profiles_empty_without_frozen_profiles() {
     let jsonl =
         r#"{"version":"hash.v0","relative_path":"f.csv","bytes_hash":"sha256:1234","size":10}"#;
     let jsonl = format!("{jsonl}\n");
@@ -169,6 +169,52 @@ fn lock_created_profiles_always_empty_in_v0() {
     let result = run_pipeline(&jsonl, None, None, None);
 
     assert!(result.parsed["profiles"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn lock_created_populates_frozen_profile_without_registry_hash() {
+    let jsonl = concat!(
+        r#"{"version":"hash.v0","relative_path":"profiles/loan.yaml","bytes_hash":"sha256:aaaaaaaa","size":100,"status":"frozen","profile_id":"loan_tape_v2","profile_sha256":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}"#,
+        "\n",
+    );
+
+    let result = run_pipeline(jsonl, None, None, None);
+
+    let profiles = result.parsed["profiles"].as_array().unwrap();
+    assert_eq!(profiles.len(), 1);
+    assert_eq!(profiles[0]["profile_id"], "loan_tape_v2");
+    assert_eq!(
+        profiles[0]["profile_sha256"],
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    );
+    assert!(profiles[0].get("column_registry_hash").is_none());
+    assert_eq!(result.parsed["member_count"], 1);
+    assert!(verify_lock_hash_from_json(&result.json).expect("should parse"));
+}
+
+#[test]
+fn lock_created_populates_frozen_profile_with_registry_hash_and_sorts_by_profile_id() {
+    let jsonl = concat!(
+        r#"{"version":"hash.v0","relative_path":"profiles/z.yaml","bytes_hash":"sha256:bbbbbbbb","size":100,"status":"frozen","profile_id":"zeta_profile","profile_sha256":"sha256:2222222222222222222222222222222222222222222222222222222222222222","column_registry_hash":"blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#,
+        "\n",
+        r#"{"version":"hash.v0","relative_path":"profiles/a.yaml","bytes_hash":"sha256:cccccccc","size":100,"status":"frozen","profile_id":"alpha_profile","profile_sha256":"sha256:3333333333333333333333333333333333333333333333333333333333333333"}"#,
+        "\n",
+        r#"{"version":"hash.v0","relative_path":"profiles/draft.yaml","bytes_hash":"sha256:dddddddd","size":100,"status":"draft","profile_id":"draft_profile","profile_sha256":"sha256:4444444444444444444444444444444444444444444444444444444444444444","column_registry_hash":"blake3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}"#,
+        "\n",
+    );
+
+    let result = run_pipeline(jsonl, None, None, None);
+
+    let profiles = result.parsed["profiles"].as_array().unwrap();
+    assert_eq!(profiles.len(), 2);
+    assert_eq!(profiles[0]["profile_id"], "alpha_profile");
+    assert!(profiles[0].get("column_registry_hash").is_none());
+    assert_eq!(profiles[1]["profile_id"], "zeta_profile");
+    assert_eq!(
+        profiles[1]["column_registry_hash"],
+        "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    assert!(verify_lock_hash_from_json(&result.json).expect("should parse"));
 }
 
 // ---------------------------------------------------------------------------

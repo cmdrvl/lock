@@ -309,11 +309,23 @@ E_MISSING_HASH:
 | `note` | string | yes | From `--note`; null if not provided |
 | `created` | string | no | ISO 8601, UTC — time the lock was created |
 | `tool_versions` | object | no | Map of tool name to semver for all tools that touched these records (merged from input `tool_versions` + lock's own version) |
-| `profiles` | string[] | no | Deduplicated list of profile IDs. Always `[]` in v0 — stream pipeline tools don't use profiles. Reserved for future use. |
+| `profiles` | profile_entry[] | no | Deduplicated frozen profile identities observed in input records, sorted by `profile_id`. Empty when no frozen profile records are present. |
 | `skipped` | object[] | no | Sorted by `path`; records excluded from members. Empty array when no records were skipped. |
 | `members` | object[] | no | Sorted by `path` (lexicographic, byte-order). The locked artifacts. |
 | `skipped_count` | u64 | no | Length of `skipped` array |
 | `member_count` | u64 | no | Length of `members` array |
+
+### Profile entry object
+
+Non-skipped frozen profile records are detected by `status: "frozen"` plus a
+present, non-empty `profile_sha256` string. `lock` records the profile identity
+carried by the input record and does not read or hash registry directories.
+
+| Field | Type | Nullable | Notes |
+|-------|------|----------|-------|
+| `profile_id` | string | no | Profile identifier declared by the frozen profile |
+| `profile_sha256` | string | no | Self-hash declared by the frozen profile |
+| `column_registry_hash` | string | omitted when absent | Registry content hash declared by the frozen profile, when present |
 
 ### Member object
 
@@ -532,6 +544,7 @@ For lock, `inputs` describes the JSONL source: `"stdin"` when piped, or the file
     d. If _skipped: true → collect into skipped list
     e. If missing bytes_hash (and not _skipped) → collect for E_MISSING_HASH refusal
     f. Otherwise → collect into members list
+    g. Independently, when a non-skipped record has `status: "frozen"` and `profile_sha256` is present, collect profile metadata from the record (`profile_id`, `profile_sha256`, and `column_registry_hash` when present)
  6. If no records at all → refuse E_EMPTY
  7. If any non-skipped records lack bytes_hash → refuse E_MISSING_HASH
     → On refusal (steps 5a/5b/6/7): emit refusal envelope to stdout, append
@@ -563,11 +576,18 @@ struct Lockfile {
     note: Option<String>,
     created: String,              // ISO 8601 UTC
     tool_versions: BTreeMap<String, String>,
-    profiles: Vec<String>,        // always empty in v0
+    profiles: Vec<ProfileEntry>,
     skipped: Vec<SkippedEntry>,
     members: Vec<Member>,
     skipped_count: u64,
     member_count: u64,
+}
+
+/// Frozen profile provenance observed in the input stream
+struct ProfileEntry {
+    profile_id: String,
+    profile_sha256: String,
+    column_registry_hash: Option<String>, // omitted when absent
 }
 
 /// A successfully processed artifact
@@ -785,7 +805,8 @@ The versions travel through the pipeline on every record — lock doesn't need t
 
   "capabilities": {
     "formats": ["jsonl"],
-    "profile_aware": false,
+    "profile_aware": true,
+    "profile_provenance": "Populates lock.v0 profiles[] from frozen profile input records with status=frozen and profile_sha256.",
     "streaming": false
   },
 
@@ -816,6 +837,7 @@ The versions travel through the pipeline on every record — lock doesn't need t
 | Self-hash | Compute → verify round-trip; canonical JSON determinism |
 | Nullable fields | `dataset_id`, `as_of`, `note` all null when not provided |
 | Fingerprint passthrough | Members with and without fingerprint results |
+| Profile provenance | Frozen profile records populate structured `profiles[]`, with `column_registry_hash` omitted when absent |
 
 ### Integration tests
 
@@ -827,6 +849,7 @@ The versions travel through the pipeline on every record — lock doesn't need t
 | Empty stdin | Exit 2, `E_EMPTY` refusal |
 | Pipe from `vacuum` only (no hash) | Exit 2, `E_MISSING_HASH` refusal |
 | Self-hash verification | Parse output, blank `lock_hash`, re-serialize, SHA256 matches |
+| Frozen profiles | `profiles[]` includes `profile_id`, `profile_sha256`, and optional `column_registry_hash`, sorted by `profile_id` |
 | Determinism | Same input with fixed `created` timestamp → identical `lock_hash`. Tests must fixture `created` (e.g., via injectable clock) because the real timestamp varies per run. |
 | Cross-platform paths | Forward-slash normalization in member paths |
 
@@ -855,11 +878,12 @@ The versions travel through the pipeline on every record — lock doesn't need t
 - Refusal JSON envelope with `next_command`
 - `--describe`, `--schema`, `--version`
 - Witness ledger protocol
+- `profiles` field population from frozen profile records
 - `operator.json`
 
 ### Defer
 
-- `profiles` field population (depends on profile tool)
+- Registry directory hashing or validation inside `lock`
 - `--strict` mode (refuse on any `_skipped` instead of exit 1)
 - Lock comparison / diff tooling
 - Witness-to-data-fabric sync (`lock push`)

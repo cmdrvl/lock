@@ -324,7 +324,8 @@
     "formats": [
       "jsonl"
     ],
-    "profile_aware": false,
+    "profile_aware": true,
+    "profile_provenance": "Populates lock.v0 profiles[] from frozen profile input records with status=frozen and profile_sha256.",
     "streaming": false,
     "agent_surfaces": {
       "robot_triage": "lock --robot-triage",

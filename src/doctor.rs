@@ -155,6 +155,7 @@ fn capabilities_report() -> Value {
             "formats": ["jsonl", "json"],
             "artifact_tool": true,
             "self_hashed_lockfiles": true,
+            "profile_provenance": true,
             "verify_self_hash": true,
             "verify_member_content": true,
             "operator_describe": true,

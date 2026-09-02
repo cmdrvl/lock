@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use lock::lockfile::self_hash::to_canonical_json;
-use lock::lockfile::{FingerprintResult, Lockfile, Member, SkippedEntry, Warning};
+use lock::lockfile::{FingerprintResult, Lockfile, Member, ProfileEntry, SkippedEntry, Warning};
 use lock::output::render_lockfile;
 use lock::refusal;
 
@@ -19,7 +19,25 @@ fn fixture_lockfile() -> Lockfile {
             ("lock".to_owned(), "0.1.0".to_owned()),
             ("vacuum".to_owned(), "0.1.0".to_owned()),
         ]),
-        profiles: vec![],
+        profiles: vec![
+            ProfileEntry {
+                profile_id: "alpha_profile".to_owned(),
+                profile_sha256:
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                        .to_owned(),
+                column_registry_hash: None,
+            },
+            ProfileEntry {
+                profile_id: "zeta_profile".to_owned(),
+                profile_sha256:
+                    "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+                        .to_owned(),
+                column_registry_hash: Some(
+                    "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_owned(),
+                ),
+            },
+        ],
         skipped: vec![SkippedEntry {
             path: "skip/me.csv".to_owned(),
             warnings: vec![Warning {

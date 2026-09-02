@@ -11,7 +11,17 @@
     "lock": "0.1.0",
     "vacuum": "0.1.0"
   },
-  "profiles": [],
+  "profiles": [
+    {
+      "profile_id": "alpha_profile",
+      "profile_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "profile_id": "zeta_profile",
+      "profile_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "column_registry_hash": "blake3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
   "skipped": [
     {
       "path": "skip/me.csv",

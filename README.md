@@ -645,7 +645,7 @@ lock verify production.lock.json --root /data/production --strict --json \
 | **No lock-to-lock diff** | Can't compare two lockfiles for changes yet — deferred in v0 |
 | **No signing** | No GPG/Sigstore integration yet — self-hash provides tamper evidence but not identity |
 | **No strict mode** | Can't refuse on any skipped record — `LOCK_PARTIAL` is the only signal |
-| **No profile population** | `profiles` field exists but is always empty in v0 |
+| **No profile registry validation** | Frozen profile records populate `profiles`, but lock trusts their declared `profile_sha256` and `column_registry_hash` instead of reading registry directories |
 | **In-memory** | All input records are collected before emitting the lockfile |
 
 ---
