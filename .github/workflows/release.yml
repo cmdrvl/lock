@@ -21,6 +21,10 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
   preflight:
     name: Release preflight checks
@@ -280,24 +284,18 @@ jobs:
           ```
           EOF
 
-      - name: Create or update GitHub release with artifacts
+      - name: Create a new GitHub release with artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          version="${{ needs.preflight.outputs.release_version }}"
           tag="${{ needs.preflight.outputs.release_tag }}"
-          if gh release view "${tag}" >/dev/null 2>&1; then
-            echo "Release ${tag} exists. Uploading artifacts to existing release."
-            gh release upload "${tag}" artifacts/* --clobber
-          else
-            gh release create "${tag}" artifacts/* \
-              --generate-notes \
-              --notes-file artifacts/release-notes.md \
-              --verify-tag \
-              --title "lock ${tag}"
-          fi
+          gh release create "${tag}" artifacts/* \
+            --generate-notes \
+            --notes-file artifacts/release-notes.md \
+            --verify-tag \
+            --title "lock ${tag}"
 
   homebrew:
     name: Update Homebrew tap
