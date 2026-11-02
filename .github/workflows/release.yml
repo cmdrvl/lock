@@ -166,7 +166,7 @@ jobs:
           staging="lock-${version}-${target}"
           mkdir -p "${staging}"
           cp "target/${target}/release/lock" "${staging}/"
-          cp README.md LICENSE* "${staging}/" 2>/dev/null || true
+          cp README.md LICENSE "${staging}/"
           tar czf "${staging}.tar.gz" "${staging}"
           echo "ARCHIVE=${staging}.tar.gz" >> "${GITHUB_ENV}"
 
@@ -180,7 +180,7 @@ jobs:
           staging="lock-${version}-${target}"
           mkdir -p "${staging}"
           cp "target/${target}/release/lock.exe" "${staging}/"
-          cp README.md LICENSE* "${staging}/" 2>/dev/null || true
+          cp README.md LICENSE "${staging}/"
           7z a "${staging}.zip" "${staging}"
           echo "ARCHIVE=${staging}.zip" >> "${GITHUB_ENV}"
 
