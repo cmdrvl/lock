@@ -58,6 +58,7 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
     let mut failures = Vec::new();
     let mut skips = Vec::new();
     let mut verified = 0;
+    let canonical_root = std::fs::canonicalize(root);
 
     for member in members {
         let member_path = member.get("path").and_then(Value::as_str).unwrap_or("");
@@ -67,13 +68,10 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
             .unwrap_or("");
         let expected_size = member.get("size").and_then(Value::as_u64);
 
-        let full_path = root.join(member_path);
-
-        // Check existence.
-        if !full_path.exists() {
+        if is_unsafe_member_path(member_path) {
             failures.push(MemberFailure {
                 path: member_path.to_string(),
-                reason: "MISSING".to_string(),
+                reason: "UNSAFE_PATH".to_string(),
                 expected: Some(expected_hash.to_string()),
                 actual: None,
                 expected_size,
@@ -82,9 +80,23 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
             continue;
         }
 
-        // Stat size.
-        let metadata = match std::fs::metadata(&full_path) {
+        let full_path = root.join(member_path);
+
+        // Inspect the link itself before resolving it. A member must be a
+        // regular file, not a symlink that could point outside --root.
+        let metadata = match std::fs::symlink_metadata(&full_path) {
             Ok(m) => m,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                failures.push(MemberFailure {
+                    path: member_path.to_string(),
+                    reason: "MISSING".to_string(),
+                    expected: Some(expected_hash.to_string()),
+                    actual: None,
+                    expected_size,
+                    actual_size: None,
+                });
+                continue;
+            }
             Err(e) => {
                 skips.push(MemberSkip {
                     path: member_path.to_string(),
@@ -94,6 +106,64 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
                 continue;
             }
         };
+
+        if metadata.is_symlink() {
+            failures.push(MemberFailure {
+                path: member_path.to_string(),
+                reason: "SYMLINK".to_string(),
+                expected: Some(expected_hash.to_string()),
+                actual: None,
+                expected_size,
+                actual_size: None,
+            });
+            continue;
+        }
+
+        if !metadata.is_file() {
+            failures.push(MemberFailure {
+                path: member_path.to_string(),
+                reason: "NON_REGULAR".to_string(),
+                expected: Some(expected_hash.to_string()),
+                actual: None,
+                expected_size,
+                actual_size: None,
+            });
+            continue;
+        }
+
+        let canonical_root = match &canonical_root {
+            Ok(root) => root,
+            Err(error) => {
+                skips.push(MemberSkip {
+                    path: member_path.to_string(),
+                    reason: "IO_ERROR".to_string(),
+                    detail: error.to_string(),
+                });
+                continue;
+            }
+        };
+        let canonical_member = match std::fs::canonicalize(&full_path) {
+            Ok(path) => path,
+            Err(error) => {
+                skips.push(MemberSkip {
+                    path: member_path.to_string(),
+                    reason: "IO_ERROR".to_string(),
+                    detail: error.to_string(),
+                });
+                continue;
+            }
+        };
+        if !canonical_member.starts_with(canonical_root) {
+            failures.push(MemberFailure {
+                path: member_path.to_string(),
+                reason: "PATH_ESCAPE".to_string(),
+                expected: Some(expected_hash.to_string()),
+                actual: None,
+                expected_size,
+                actual_size: None,
+            });
+            continue;
+        }
 
         let actual_size = metadata.len();
         if let Some(exp_size) = expected_size
@@ -111,7 +181,7 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
         }
 
         // Stream-hash the file.
-        match stream_hash(&full_path, expected_hash) {
+        match stream_hash(&canonical_member, expected_hash) {
             Ok(actual_hash) => {
                 if actual_hash == expected_hash {
                     verified += 1;
@@ -149,6 +219,24 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
         failures,
         skips,
     }
+}
+
+fn is_unsafe_member_path(path: &str) -> bool {
+    if path.is_empty() || path.starts_with('/') || path.starts_with('\\') {
+        return true;
+    }
+
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+    {
+        return true;
+    }
+
+    path.split('/').any(|segment| segment == "..")
+        || path.split('\\').any(|segment| segment == "..")
 }
 
 /// Determine the outcome from member verification results.
@@ -417,5 +505,73 @@ mod tests {
 
         let result = verify_members(&lockfile, &root);
         assert_eq!(result.verified, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outside_symlinks_fail_before_external_hashing() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let content = b"outside secret";
+        std::fs::write(outside.join("secret.txt"), content).unwrap();
+        symlink(outside.join("secret.txt"), root.join("direct-link")).unwrap();
+        symlink(&outside, root.join("parent-link")).unwrap();
+
+        let hash = hash_sha256(content);
+        let lockfile = serde_json::json!({
+            "members": [
+                { "path": "direct-link", "bytes_hash": hash, "size": content.len() },
+                { "path": "parent-link/secret.txt", "bytes_hash": hash, "size": content.len() }
+            ]
+        });
+
+        let result = verify_members(&lockfile, &root);
+        assert_eq!(result.failed, 2);
+        assert_eq!(result.skipped, 0);
+        assert!(result.failures.iter().all(|failure| {
+            (failure.reason == "SYMLINK" || failure.reason == "PATH_ESCAPE")
+                && failure.actual.is_none()
+        }));
+        assert_eq!(members_outcome(&result, true), ("VERIFY_FAILED", 1));
+    }
+
+    #[test]
+    fn traversal_and_non_regular_members_fail_without_hashing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("root");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(tmp.path().join("outside.txt"), b"outside secret").unwrap();
+        std::fs::create_dir(root.join("directory-member")).unwrap();
+
+        let lockfile = serde_json::json!({
+            "members": [
+                { "path": "../outside.txt", "bytes_hash": "sha256:0000", "size": 14 },
+                { "path": "directory-member", "bytes_hash": "sha256:0000", "size": 0 }
+            ]
+        });
+
+        let result = verify_members(&lockfile, &root);
+        assert_eq!(result.failed, 2);
+        assert_eq!(result.skipped, 0);
+        assert!(
+            result
+                .failures
+                .iter()
+                .any(|failure| failure.path == "../outside.txt" && failure.reason == "UNSAFE_PATH")
+        );
+        assert!(result.failures.iter().any(|failure| {
+            failure.path == "directory-member" && failure.reason == "NON_REGULAR"
+        }));
+        assert!(
+            result
+                .failures
+                .iter()
+                .all(|failure| failure.actual.is_none())
+        );
     }
 }
