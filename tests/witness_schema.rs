@@ -110,3 +110,17 @@ fn schema_rejects_invalid_hash_format() {
 
     assert!(validate(&record).is_err(), "invalid output_hash must fail");
 }
+
+#[test]
+fn schema_rejects_missing_created_param() {
+    let (_code, mut record) = run_and_read_single_witness_record(
+        r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaaaaaa","size":10}
+"#,
+    );
+    record["params"].as_object_mut().unwrap().remove("created");
+
+    assert!(
+        validate(&record).is_err(),
+        "missing created witness parameter must fail"
+    );
+}

@@ -516,7 +516,7 @@ lock's witness record follows the standard `witness.v0` schema:
   "inputs": [
     { "path": "stdin", "hash": null, "bytes": null }
   ],
-  "params": { "dataset_id": "dec-delivery", "as_of": null, "note": null },
+  "params": { "dataset_id": "dec-delivery", "as_of": null, "created": null, "note": null },
   "outcome": "LOCK_CREATED",
   "exit_code": 0,
   "output_hash": "blake3:...",

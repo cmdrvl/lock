@@ -88,6 +88,7 @@
       "required": [
         "dataset_id",
         "as_of",
+        "created",
         "note"
       ],
       "properties": {
@@ -102,6 +103,17 @@
           ]
         },
         "as_of": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "created": {
+          "description": "The user-supplied --created timestamp, or null when the lock timestamp was resolved from SOURCE_DATE_EPOCH or the clock.",
           "oneOf": [
             {
               "type": "null"
