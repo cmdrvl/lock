@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{ColorChoice, Parser, Subcommand};
 
 /// Dataset lockfile tool: pins artifacts, fingerprints, and tool versions
 /// into a single immutable, self-hashed lockfile.
@@ -9,7 +9,8 @@ use clap::{Parser, Subcommand};
     name = "lock",
     version,
     about,
-    override_usage = "lock [<INPUT>] [OPTIONS]\n       lock --robot-triage\n       lock capabilities --json\n       lock robot-docs guide\n       lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]\n       lock witness <query|last|count> [OPTIONS]\n       lock doctor <health|capabilities|robot-docs> [OPTIONS]"
+    color = ColorChoice::Never,
+    override_usage = "lock [<INPUT>] [OPTIONS]\n       lock --robot-triage\n       lock capabilities --json\n       lock robot-docs guide\n       lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]\n       lock witness <query|last|count> [OPTIONS]\n       lock doctor <health|capabilities|triage|robot-docs> [OPTIONS]"
 )]
 pub struct Cli {
     #[command(subcommand)]
@@ -30,12 +31,16 @@ pub struct Cli {
     #[arg(long, value_name = "RFC3339")]
     pub created: Option<String>,
 
+    /// Accept structured-output intent; lock output is always JSON
+    #[arg(long)]
+    pub json: bool,
+
     /// Free-text annotation
     #[arg(long)]
     pub note: Option<String>,
 
     /// Write lockfile to this path instead of stdout (avoids self-inclusion when path is inside vacuum root)
-    #[arg(long, value_name = "PATH")]
+    #[arg(long = "out", visible_alias = "output", value_name = "PATH")]
     pub output: Option<PathBuf>,
 
     /// Suppress witness ledger recording for this run
@@ -114,8 +119,17 @@ pub enum DoctorAction {
         #[arg(long)]
         json: bool,
     },
+    /// Emit machine-readable next actions after health checks
+    Triage(DoctorTriageArgs),
     /// Print agent-oriented doctor documentation
     RobotDocs,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DoctorTriageArgs {
+    /// Output JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 /// Arguments for the `lock verify` subcommand.
@@ -648,8 +662,8 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(OPERATOR_JSON).expect("operator.json must be valid JSON");
         assert_eq!(parsed["name"], "lock");
-        assert_eq!(parsed["schema_version"], "operator.v0");
-        assert_eq!(parsed["version"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(parsed["schema_version"], "operator.v1");
+        assert_eq!(parsed["tool_version"], env!("CARGO_PKG_VERSION"));
     }
 
     #[test]

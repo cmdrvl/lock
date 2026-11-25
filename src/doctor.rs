@@ -1,15 +1,8 @@
 use serde_json::{Value, json};
 
-use crate::{
-    cli::{DoctorAction, RobotDocsAction},
-    witness::resolve_ledger_path,
-};
+use crate::cli::{DoctorAction, RobotDocsAction};
 
-const HEALTH_SCHEMA_VERSION: &str = "lock.doctor.health.v1";
-const CAPABILITIES_SCHEMA_VERSION: &str = "lock.doctor.capabilities.v1";
-const TRIAGE_SCHEMA_VERSION: &str = "lock.doctor.triage.v1";
-const READ_ONLY_DOCTOR_CONTRACT: &str = "cmdrvl.read_only_doctor.v1";
-
+const DOCTOR_SCHEMA_VERSION: &str = "cmdrvl.doctor.v1";
 const OPERATOR_JSON: &str = include_str!("../operator.json");
 const LOCK_SCHEMA: &str = include_str!("../schemas/lock-v0.schema.json");
 const VERIFY_SCHEMA: &str = include_str!("../schemas/lock-verify-v0.schema.json");
@@ -31,6 +24,7 @@ pub fn dispatch(
     match action {
         Some(DoctorAction::Health { json }) => render_health(*json || json_mode),
         Some(DoctorAction::Capabilities { json }) => render_capabilities(*json || json_mode),
+        Some(DoctorAction::Triage(args)) => render_triage(json_mode || args.json),
         Some(DoctorAction::RobotDocs) => {
             print_robot_docs(None);
             0
@@ -40,13 +34,20 @@ pub fn dispatch(
 }
 
 pub fn dispatch_robot_triage() -> u8 {
-    let report = triage_report();
-    print_json(&report);
-    exit_for_report(report.get("health").unwrap_or(&Value::Null))
+    render_triage(true)
 }
 
 pub fn dispatch_capabilities(json_mode: bool) -> u8 {
-    render_capabilities(json_mode)
+    if json_mode {
+        print_operator_json();
+    } else {
+        println!("lock capabilities");
+        println!("operator contract: lock --describe");
+        println!("doctor: lock doctor --json");
+        println!("triage: lock doctor triage --json");
+        println!("robot docs: lock robot-docs guide");
+    }
+    0
 }
 
 pub fn dispatch_robot_docs(action: Option<&RobotDocsAction>) -> u8 {
@@ -55,7 +56,7 @@ pub fn dispatch_robot_docs(action: Option<&RobotDocsAction>) -> u8 {
 }
 
 fn render_health(json_mode: bool) -> u8 {
-    let report = health_report();
+    let report = doctor_report("health");
     if json_mode {
         print_json(&report);
     } else {
@@ -65,524 +66,175 @@ fn render_health(json_mode: bool) -> u8 {
 }
 
 fn render_capabilities(json_mode: bool) -> u8 {
-    let report = capabilities_report();
+    let report = doctor_report("capabilities");
     if json_mode {
         print_json(&report);
     } else {
-        print_capabilities_human(&report);
+        println!("lock doctor capabilities");
+        println!("contract: lock capabilities --json");
+        println!("healthy: {}", report["healthy"]);
     }
-    0
+    exit_for_report(&report)
 }
 
-fn health_report() -> Value {
-    let checks = vec![
-        operator_manifest_check(),
-        lock_schema_check(),
-        verify_schema_check(),
-        witness_path_check(),
-        artifact_stdout_contract_check(),
+fn render_triage(json_mode: bool) -> u8 {
+    let report = doctor_report("triage");
+    if json_mode {
+        print_json(&report);
+    } else {
+        print_health_human(&report);
+        println!("next: lock capabilities --json");
+    }
+    exit_for_report(&report)
+}
+
+fn doctor_report(mode: &str) -> Value {
+    let findings = health_findings();
+    let healthy = !findings
+        .iter()
+        .any(|finding| finding.get("severity").and_then(Value::as_str) == Some("error"));
+    let mut report = json!({
+        "schema_version": DOCTOR_SCHEMA_VERSION,
+        "mode": mode,
+        "tool": "lock",
+        "tool_version": env!("CARGO_PKG_VERSION"),
+        "healthy": healthy,
+        "findings": findings,
+    });
+
+    match mode {
+        "health" => {}
+        "capabilities" => report["contract"] = operator_contract(),
+        "triage" => {
+            report["next_actions"] = if healthy {
+                json!(["lock capabilities --json", "lock robot-docs guide"])
+            } else {
+                json!(["lock doctor --json", "lock doctor capabilities --json"])
+            };
+        }
+        _ => unreachable!("doctor mode is fixed by the caller"),
+    }
+    report
+}
+
+fn health_findings() -> Vec<Value> {
+    let checks = [
+        (
+            "lock.operator_manifest",
+            operator_manifest_is_valid(),
+            "operator.v1 manifest matches the compiled lock binary",
+        ),
+        (
+            "lock.lock_schema",
+            schema_has_title(LOCK_SCHEMA, "lock.v0"),
+            "lock.v0 schema is available",
+        ),
+        (
+            "lock.verify_schema",
+            schema_has_title(VERIFY_SCHEMA, "lock-verify.v0"),
+            "lock-verify.v0 schema is available",
+        ),
+        (
+            "lock.source_date_epoch",
+            source_date_epoch_is_valid(),
+            "SOURCE_DATE_EPOCH is accepted for reproducible creation timestamps",
+        ),
     ];
-    let summary = summary_from_checks(&checks);
-    let ok = summary.get("error").and_then(Value::as_u64).unwrap_or(0) == 0;
 
-    json!({
-        "schema_version": HEALTH_SCHEMA_VERSION,
-        "tool": "lock",
-        "version": env!("CARGO_PKG_VERSION"),
-        "contract": READ_ONLY_DOCTOR_CONTRACT,
-        "read_only": true,
-        "ok": ok,
-        "summary": summary,
-        "checks": checks,
-        "recommended_actions": recommended_actions(ok),
-        "fixers": [],
-    })
+    checks
+        .into_iter()
+        .map(|(id, ok, message)| {
+            let epoch_check = id == "lock.source_date_epoch";
+            let severity = if ok {
+                "info"
+            } else if epoch_check {
+                "warning"
+            } else {
+                "error"
+            };
+            let mut finding = json!({
+                "id": id,
+                "severity": severity,
+                "message": message,
+            });
+            if !ok {
+                finding["fix"] = json!(if epoch_check {
+                    "set SOURCE_DATE_EPOCH to an integer Unix timestamp"
+                } else {
+                    "inspect lock --describe and the compiled schemas"
+                });
+            }
+            finding
+        })
+        .collect()
 }
 
-fn capabilities_report() -> Value {
-    json!({
-        "schema_version": CAPABILITIES_SCHEMA_VERSION,
-        "tool": "lock",
-        "version": env!("CARGO_PKG_VERSION"),
-        "contract": READ_ONLY_DOCTOR_CONTRACT,
-        "read_only": true,
-        "network": {
-            "required": false,
-            "used": false
-        },
-        "online_default": false,
-        "agent_surfaces": {
-            "lock_creation": {
-                "command": "lock [<INPUT>] [OPTIONS]",
-                "output": "lock.v0 artifact JSON or REFUSAL envelope",
-                "mutates": true,
-                "notes": "May append a witness record by default and may write the lockfile when --output is provided."
-            },
-            "verify": {
-                "command": "lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]",
-                "output": "human text or lock-verify.v0 JSON depending on --json",
-                "mutates": true,
-                "notes": "May append a witness record unless --no-witness is provided."
-            },
-            "robot_triage": {
-                "command": "lock --robot-triage",
-                "output": "lock.doctor.triage.v1 JSON diagnostic report",
-                "mutates": false
-            },
-            "capabilities": {
-                "command": "lock capabilities --json",
-                "output": "lock.doctor.capabilities.v1 JSON capability contract",
-                "mutates": false
-            },
-            "robot_docs": {
-                "command": "lock robot-docs guide",
-                "output": "agent-oriented markdown guide",
-                "mutates": false
-            },
-            "doctor_namespace": {
-                "commands": [
-                    "lock doctor health",
-                    "lock doctor health --json",
-                    "lock doctor capabilities --json",
-                    "lock doctor robot-docs",
-                    "lock doctor --robot-triage",
-                    "lock doctor --fix"
-                ],
-                "status": "available"
-            }
-        },
-        "lock_capabilities": {
-            "formats": ["jsonl", "json"],
-            "artifact_tool": true,
-            "self_hashed_lockfiles": true,
-            "profile_provenance": true,
-            "verify_self_hash": true,
-            "verify_member_content": true,
-            "operator_describe": true,
-            "schema_describe": true,
-            "witness_query": true,
-            "streaming": false
-        },
-        "composition": {
-            "family": {
-                "name": "cmdrvl-spine",
-                "siblings": [
-                    {"tool": "vacuum", "capabilities": "vacuum capabilities --json"},
-                    {"tool": "hashbytes", "capabilities": "hashbytes capabilities --json"},
-                    {"tool": "fingerprint", "capabilities": "fingerprint capabilities --json"},
-                    {"tool": "lock", "capabilities": "lock capabilities --json"},
-                    {"tool": "pack", "capabilities": "pack capabilities --json"}
-                ]
-            },
-            "role": "artifact boundary; pin upstream JSONL evidence into a self-hashed lock.v0 file",
-            "position": 4,
-            "accepts": ["vacuum.v0 JSONL", "hash.v0 JSONL", "fingerprint.v0 JSONL"],
-            "produces": ["lock.v0 JSON"],
-            "canonical_chain": [
-                "vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID> | lock --dataset-id <DATASET> > dataset.lock.json",
-                "pack seal dataset.lock.json --output evidence/<DATASET>/"
-            ],
-            "agent_rules": [
-                "Use lock after upstream tools have emitted versioned JSONL records.",
-                "Use pack seal, not lock, when the input is already a standalone artifact.",
-                "Pass --no-witness for deterministic read-side smoke tests."
-            ]
-        },
-        "side_effects": {
-            "reads_stdin": false,
-            "reads_input_jsonl": false,
-            "reads_lockfiles": false,
-            "verifies_member_content": false,
-            "creates_lockfiles": false,
-            "writes_output_files": false,
-            "writes_witness_ledger": false,
-            "creates_witness_directory": false,
-            "writes_doctor_artifacts": false,
-            "rewrites_operator_manifest": false,
-            "rewrites_schema": false,
-            "uses_network": false,
-            "by_command": {
-                "lock --robot-triage": {
-                    "reads_stdin": false,
-                    "reads_input_jsonl": false,
-                    "reads_lockfiles": false,
-                    "verifies_member_content": false,
-                    "creates_lockfiles": false,
-                    "writes_output_files": false,
-                    "writes_witness_ledger": false,
-                    "creates_witness_directory": false,
-                    "writes_doctor_artifacts": false,
-                    "uses_network": false
-                },
-                "lock capabilities --json": {
-                    "reads_stdin": false,
-                    "reads_input_jsonl": false,
-                    "reads_lockfiles": false,
-                    "verifies_member_content": false,
-                    "creates_lockfiles": false,
-                    "writes_output_files": false,
-                    "writes_witness_ledger": false,
-                    "creates_witness_directory": false,
-                    "writes_doctor_artifacts": false,
-                    "uses_network": false
-                },
-                "lock robot-docs guide": {
-                    "reads_stdin": false,
-                    "reads_input_jsonl": false,
-                    "reads_lockfiles": false,
-                    "verifies_member_content": false,
-                    "creates_lockfiles": false,
-                    "writes_output_files": false,
-                    "writes_witness_ledger": false,
-                    "creates_witness_directory": false,
-                    "writes_doctor_artifacts": false,
-                    "uses_network": false
-                },
-                "lock doctor --fix": {
-                    "available": false,
-                    "reads_stdin": false,
-                    "reads_input_jsonl": false,
-                    "reads_lockfiles": false,
-                    "verifies_member_content": false,
-                    "creates_lockfiles": false,
-                    "writes_output_files": false,
-                    "writes_witness_ledger": false,
-                    "creates_witness_directory": false,
-                    "writes_doctor_artifacts": false,
-                    "uses_network": false
-                }
-            }
-        },
-        "commands": [
-            {
-                "command": "lock --robot-triage",
-                "description": "Emit health and capabilities in one robot-readable report."
-            },
-            {
-                "command": "lock capabilities --json",
-                "description": "Describe agent-facing command surfaces and mutation policy."
-            },
-            {
-                "command": "lock robot-docs guide",
-                "description": "Print agent-oriented usage notes."
-            },
-            {
-                "command": "lock [<INPUT>] [OPTIONS]",
-                "description": "Create a self-hashed lock.v0 artifact from upstream JSONL."
-            },
-            {
-                "command": "lock verify <LOCKFILE> --json",
-                "description": "Verify lockfile integrity and optionally member content."
-            },
-            {
-                "command": "lock doctor health",
-                "json": "lock doctor health --json",
-                "description": "Run read-only static health checks."
-            },
-            {
-                "command": "lock doctor capabilities --json",
-                "description": "Describe the doctor command surface and mutation policy."
-            },
-            {
-                "command": "lock doctor robot-docs",
-                "description": "Print agent-oriented usage notes."
-            },
-            {
-                "command": "lock doctor --robot-triage",
-                "description": "Emit health and capabilities in one robot-readable report."
-            },
-            {
-                "command": "lock doctor --fix",
-                "description": "Refuse safely; fix mode is not available in this release."
-            }
-        ],
-        "detectors": [
-            {
-                "name": "operator_manifest",
-                "mode": "compiled_static_json",
-                "mutates": false
-            },
-            {
-                "name": "lock_schema",
-                "mode": "compiled_static_json",
-                "mutates": false
-            },
-            {
-                "name": "verify_schema",
-                "mode": "compiled_static_json",
-                "mutates": false
-            },
-            {
-                "name": "witness_path_resolution",
-                "mode": "environment_resolution_only",
-                "mutates": false
-            },
-            {
-                "name": "artifact_stdout_contract",
-                "mode": "static_contract",
-                "mutates": false
-            }
-        ],
-        "output_contract": {
-            "lock_stdout": "lock.v0 artifact JSON or REFUSAL envelope",
-            "verify_stdout": "human text or lock-verify.v0 JSON depending on --json",
-            "doctor_stdout": "human text or JSON doctor reports",
-            "doctor_stderr": "unused on successful doctor commands"
-        },
-        "fix_mode": {
-            "available": false,
-            "status": "not_available",
-            "command": "lock doctor --fix",
-            "behavior": "exits 2, emits only stderr, and names read-only alternatives",
-            "reason": "No lock fixer has detector, backup, inverse, and fixture coverage yet."
-        },
-        "fixers": []
-    })
+fn source_date_epoch_is_valid() -> bool {
+    std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .is_none_or(|value| value.parse::<i64>().is_ok())
 }
 
-fn triage_report() -> Value {
-    let health = health_report();
-    let capabilities = capabilities_report();
-    let ok = health.get("ok").cloned().unwrap_or(Value::Bool(false));
-    let recommended_actions = health
-        .get("recommended_actions")
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-
-    json!({
-        "schema_version": TRIAGE_SCHEMA_VERSION,
-        "tool": "lock",
-        "version": env!("CARGO_PKG_VERSION"),
-        "contract": READ_ONLY_DOCTOR_CONTRACT,
-        "ok": ok,
-        "health": health,
-        "capabilities": capabilities,
-        "recommended_actions": recommended_actions,
-    })
+fn schema_has_title(schema: &str, expected: &str) -> bool {
+    serde_json::from_str::<Value>(schema)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("title")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|title| title == expected)
 }
 
-fn operator_manifest_check() -> Value {
-    let parsed = match serde_json::from_str::<Value>(OPERATOR_JSON) {
-        Ok(value) => value,
-        Err(error) => {
-            return check(
-                "operator_manifest",
-                "error",
-                format!("Compiled operator manifest is invalid JSON: {error}"),
-                json!({ "source": "operator.json" }),
-            );
-        }
+fn operator_contract() -> Value {
+    serde_json::from_str(OPERATOR_JSON).expect("operator.json must be valid JSON")
+}
+
+fn operator_manifest_is_valid() -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(OPERATOR_JSON) else {
+        return false;
     };
+    let commands_ok = ["capabilities", "robot-docs", "doctor"]
+        .into_iter()
+        .all(|expected| {
+            value
+                .get("commands")
+                .and_then(Value::as_array)
+                .is_some_and(|commands| {
+                    commands.iter().any(|command| {
+                        command.get("name").and_then(Value::as_str) == Some(expected)
+                    })
+                })
+        });
 
-    let expected_version = env!("CARGO_PKG_VERSION");
-    let name_ok = parsed.get("name").and_then(Value::as_str) == Some("lock");
-    let schema_ok = parsed.get("schema_version").and_then(Value::as_str) == Some("operator.v0");
-    let version_ok = parsed.get("version").and_then(Value::as_str) == Some(expected_version);
-
-    if name_ok && schema_ok && version_ok {
-        check(
-            "operator_manifest",
-            "ok",
-            "Compiled operator manifest matches the current binary.",
-            json!({
-                "schema_version": parsed.get("schema_version"),
-                "version": parsed.get("version")
-            }),
-        )
-    } else {
-        check(
-            "operator_manifest",
-            "error",
-            "Compiled operator manifest does not match the current binary contract.",
-            json!({
-                "expected_name": "lock",
-                "actual_name": parsed.get("name"),
-                "expected_schema_version": "operator.v0",
-                "actual_schema_version": parsed.get("schema_version"),
-                "expected_version": expected_version,
-                "actual_version": parsed.get("version")
-            }),
-        )
-    }
+    value.get("schema_version").and_then(Value::as_str) == Some("operator.v1")
+        && value.get("name").and_then(Value::as_str) == Some("lock")
+        && value.get("tool_version").and_then(Value::as_str) == Some(env!("CARGO_PKG_VERSION"))
+        && value.get("contract_version").and_then(Value::as_str) == Some("1.0.0")
+        && commands_ok
 }
 
-fn lock_schema_check() -> Value {
-    schema_title_check(
-        "lock_schema",
-        LOCK_SCHEMA,
-        "lock.v0",
-        "schemas/lock-v0.schema.json",
-    )
-}
-
-fn verify_schema_check() -> Value {
-    schema_title_check(
-        "verify_schema",
-        VERIFY_SCHEMA,
-        "lock-verify.v0",
-        "schemas/lock-verify-v0.schema.json",
-    )
-}
-
-fn schema_title_check(name: &str, source: &str, expected_title: &str, source_path: &str) -> Value {
-    let parsed = match serde_json::from_str::<Value>(source) {
-        Ok(value) => value,
-        Err(error) => {
-            return check(
-                name,
-                "error",
-                format!("Compiled schema is invalid JSON: {error}"),
-                json!({ "source": source_path }),
-            );
-        }
-    };
-
-    if parsed.get("title").and_then(Value::as_str) == Some(expected_title) {
-        check(
-            name,
-            "ok",
-            format!("Compiled schema advertises {expected_title}."),
-            json!({
-                "title": parsed.get("title"),
-                "schema": parsed.get("$schema")
-            }),
-        )
-    } else {
-        check(
-            name,
-            "error",
-            format!("Compiled schema title is not {expected_title}."),
-            json!({
-                "expected_title": expected_title,
-                "actual_title": parsed.get("title")
-            }),
-        )
-    }
-}
-
-fn witness_path_check() -> Value {
-    let path = resolve_ledger_path();
-    let parent = path.parent();
-
-    check(
-        "witness_path_resolution",
-        "ok",
-        "Resolved witness ledger path without creating directories or appending records.",
-        json!({
-            "path": path.display().to_string(),
-            "parent": parent.map(|value| value.display().to_string()),
-            "parent_exists": parent.is_some_and(|value| value.exists()),
-            "write_attempted": false
-        }),
-    )
-}
-
-fn artifact_stdout_contract_check() -> Value {
-    check(
-        "artifact_stdout_contract",
-        "ok",
-        "Doctor commands are outside the lock and verify paths; lock artifact stdout remains structured JSON.",
-        json!({
-            "lock_stdout": "lock.v0 JSON or REFUSAL envelope",
-            "verify_stdout": "human text or lock-verify.v0 JSON",
-            "doctor_stdout": "doctor report",
-            "witness_append": false
-        }),
-    )
-}
-
-fn check(name: &str, status: &str, message: impl Into<String>, details: Value) -> Value {
-    json!({
-        "name": name,
-        "status": status,
-        "message": message.into(),
-        "details": details
-    })
-}
-
-fn summary_from_checks(checks: &[Value]) -> Value {
-    let mut ok = 0;
-    let mut warn = 0;
-    let mut error = 0;
-
-    for check in checks {
-        match check.get("status").and_then(Value::as_str) {
-            Some("ok") => ok += 1,
-            Some("warn") => warn += 1,
-            Some("error") => error += 1,
-            _ => error += 1,
-        }
-    }
-
-    json!({
-        "ok": ok,
-        "warn": warn,
-        "error": error,
-        "total": checks.len()
-    })
-}
-
-fn recommended_actions(ok: bool) -> Vec<&'static str> {
-    if ok {
-        vec![]
-    } else {
-        vec!["Inspect the failing compiled manifest or schema check before releasing lock."]
+fn print_operator_json() {
+    print!("{OPERATOR_JSON}");
+    if !OPERATOR_JSON.ends_with('\n') {
+        println!();
     }
 }
 
 fn print_health_human(report: &Value) {
-    let summary = report.get("summary").unwrap_or(&Value::Null);
-    let errors = summary.get("error").and_then(Value::as_u64).unwrap_or(0);
-    let warnings = summary.get("warn").and_then(Value::as_u64).unwrap_or(0);
-    let passed = summary.get("ok").and_then(Value::as_u64).unwrap_or(0);
-    let state = if errors == 0 { "healthy" } else { "unhealthy" };
-
-    println!("lock doctor {state}: {passed} checks passed, {warnings} warnings, {errors} errors");
-
-    if let Some(checks) = report.get("checks").and_then(Value::as_array) {
-        for check in checks {
-            let status = check
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or("error")
-                .to_ascii_uppercase();
-            let name = check
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("<unknown>");
-            let message = check
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("<no message>");
-            println!("[{status}] {name}: {message}");
-        }
-    }
-}
-
-fn print_capabilities_human(report: &Value) {
-    println!("lock doctor capabilities");
+    let healthy = report["healthy"].as_bool().unwrap_or(false);
     println!(
-        "read_only: {}",
-        report.get("read_only").unwrap_or(&Value::Bool(false))
+        "lock doctor: {}",
+        if healthy { "healthy" } else { "unhealthy" }
     );
-    println!(
-        "contract: {}",
-        report.get("contract").and_then(Value::as_str).unwrap_or("")
-    );
-    println!(
-        "fix_mode: {}",
-        report
-            .get("fix_mode")
-            .and_then(|value| value.get("status"))
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-    );
-    println!("commands:");
-    if let Some(commands) = report.get("commands").and_then(Value::as_array) {
-        for command in commands {
-            if let Some(name) = command.get("command").and_then(Value::as_str) {
-                println!("  - {name}");
-            }
+    if let Some(findings) = report.get("findings").and_then(Value::as_array) {
+        for finding in findings {
+            println!(
+                "- {}: {}",
+                finding["id"].as_str().unwrap_or("unknown"),
+                finding["message"].as_str().unwrap_or("unknown")
+            );
         }
     }
 }
@@ -608,6 +260,7 @@ fn print_robot_docs(action: Option<&RobotDocsAction>) {
     println!("- `lock doctor health` for human health output.");
     println!("- `lock doctor health --json` for machine-readable health.");
     println!("- `lock doctor capabilities --json` for command and side-effect policy.");
+    println!("- `lock doctor triage --json` for machine-readable next actions.");
     println!("- `lock doctor --robot-triage` for a single JSON triage payload.");
     println!();
     println!("Composition:");
@@ -649,9 +302,22 @@ fn fix_unavailable() -> u8 {
 }
 
 fn exit_for_report(report: &Value) -> u8 {
-    if report.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+    if report["healthy"].as_bool() == Some(true) {
         0
     } else {
-        2
+        1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::exit_for_report;
+
+    #[test]
+    fn unhealthy_doctor_report_exits_one() {
+        let report = json!({"healthy": false});
+        assert_eq!(exit_for_report(&report), 1);
     }
 }

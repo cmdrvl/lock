@@ -1,7 +1,8 @@
 {
-  "schema_version": "operator.v0",
+  "schema_version": "operator.v1",
   "name": "lock",
-  "version": "0.6.0",
+  "tool_version": "0.6.0",
+  "contract_version": "1.0.0",
   "description": "Dataset lockfile tool: pins artifacts, fingerprints, and tool versions into a self-hashed immutable JSON artifact",
   "repository": "https://github.com/cmdrvl/lock",
   "license": "MIT",
@@ -16,12 +17,12 @@
       "lock robot-docs guide",
       "lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]",
       "lock witness <query|last|count> [OPTIONS]",
-      "lock doctor <health|capabilities|robot-docs> [OPTIONS]",
+      "lock doctor <health|capabilities|triage|robot-docs> [OPTIONS]",
       "lock doctor --robot-triage"
     ],
     "output_mode": "artifact",
     "output_schema": "lock.v0",
-    "json_flag": null
+    "json_flag": "--json"
   },
 
   "arguments": [
@@ -48,16 +49,29 @@
       "description": "Point-in-time annotation (ISO 8601)"
     },
     {
+      "name": "created",
+      "flag": "--created",
+      "type": "string",
+      "description": "Reproducible lock creation timestamp (RFC3339, normalized to UTC)"
+    },
+    {
       "name": "note",
       "flag": "--note",
       "type": "string",
       "description": "Free-text annotation"
     },
     {
-      "name": "output",
-      "flag": "--output",
+      "name": "out",
+      "flag": "--out",
+      "aliases": ["--output"],
       "type": "file_path",
       "description": "Write lockfile to this path instead of stdout (avoids self-inclusion when path is inside vacuum root)"
+    },
+    {
+      "name": "json",
+      "flag": "--json",
+      "type": "flag",
+      "description": "Accepted as a no-op because lock output is always JSON"
     },
     {
       "name": "no_witness",
@@ -91,7 +105,7 @@
     }
   ],
 
-  "subcommands": [
+  "commands": [
     {
       "name": "capabilities",
       "description": "Print the machine-readable lock capability contract",
@@ -107,7 +121,7 @@
         }
       ],
       "current_runtime_behavior": {
-        "schema_version": "lock.doctor.capabilities.v1",
+          "schema_version": "operator.v1",
         "writes_witness": false,
         "writes_files": false,
         "uses_network": false
@@ -245,7 +259,7 @@
       "name": "doctor",
       "description": "Read-only diagnostics for agents and operators",
       "status": "available",
-      "usage": "lock doctor <health|capabilities|robot-docs> [--json] | lock doctor --robot-triage | lock doctor --fix",
+      "usage": "lock doctor <health|capabilities|triage|robot-docs> [--json] | lock doctor --robot-triage | lock doctor --fix",
       "read_only": true,
       "fix_mode": "not_available",
       "current_runtime_behavior": {
@@ -265,6 +279,10 @@
         {
           "name": "capabilities",
           "usage": "lock doctor capabilities --json"
+        },
+        {
+          "name": "triage",
+          "usage": "lock doctor triage --json"
         },
         {
           "name": "robot-docs",
@@ -320,6 +338,25 @@
     }
   ],
 
+  "env_vars": [
+    { "name": "HOME", "description": "Base directory for witness state and legacy migration" },
+    { "name": "USERPROFILE", "description": "Windows-compatible home directory fallback" },
+    { "name": "EPISTEMIC_WITNESS", "description": "Optional witness ledger path override" },
+    { "name": "NO_COLOR", "description": "Disable terminal color" },
+    { "name": "TERM", "description": "Terminal capability hint" },
+    { "name": "SOURCE_DATE_EPOCH", "description": "Unix timestamp for reproducible lock creation" }
+  ],
+
+  "formats": ["jsonl", "json"],
+
+  "side_effects": {
+    "reads_files": true,
+    "writes_files": true,
+    "network": false,
+    "writes_witness": true,
+    "notes": "doctor, capabilities, and robot-docs are read-only; lock creation may write the requested lockfile and witness ledger"
+  },
+
   "capabilities": {
     "formats": [
       "jsonl"
@@ -331,7 +368,7 @@
       "robot_triage": "lock --robot-triage",
       "capabilities": "lock capabilities --json",
       "robot_docs": "lock robot-docs guide",
-      "doctor": "lock doctor <health|capabilities|robot-docs> [OPTIONS]"
+      "doctor": "lock doctor <health|capabilities|triage|robot-docs> [OPTIONS]"
     },
     "witness": {
       "ambient_recording": "enabled_by_default",

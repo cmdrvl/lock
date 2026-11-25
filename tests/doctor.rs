@@ -36,11 +36,12 @@ fn doctor_health_json_exits_zero_without_writing_witness() {
 
     let report: Value =
         serde_json::from_slice(&output.stdout).expect("doctor health should emit JSON");
-    assert_eq!(report["schema_version"], "lock.doctor.health.v1");
+    assert_eq!(report["schema_version"], "cmdrvl.doctor.v1");
+    assert_eq!(report["mode"], "health");
     assert_eq!(report["tool"], "lock");
-    assert_eq!(report["read_only"], true);
-    assert_eq!(report["ok"], true);
-    assert_eq!(report["fixers"], serde_json::json!([]));
+    assert_eq!(report["tool_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(report["healthy"], true);
+    assert!(report["findings"].is_array());
 }
 
 #[test]
@@ -56,26 +57,11 @@ fn doctor_capabilities_json_advertises_no_fixers() {
     let report: Value =
         serde_json::from_slice(&output.stdout).expect("capabilities should emit JSON");
 
-    assert_eq!(report["schema_version"], "lock.doctor.capabilities.v1");
-    assert_eq!(report["read_only"], true);
-    assert_eq!(report["side_effects"]["writes_witness_ledger"], false);
-    assert_eq!(report["side_effects"]["reads_stdin"], false);
-    assert_eq!(report["side_effects"]["creates_lockfiles"], false);
-    assert_eq!(
-        report["agent_surfaces"]["capabilities"]["command"],
-        "lock capabilities --json"
-    );
-    assert_eq!(
-        report["agent_surfaces"]["robot_docs"]["command"],
-        "lock robot-docs guide"
-    );
-    assert_eq!(
-        report["side_effects"]["by_command"]["lock capabilities --json"]["uses_network"],
-        false
-    );
-    assert_eq!(report["fix_mode"]["status"], "not_available");
-    assert_eq!(report["fix_mode"]["available"], false);
-    assert_eq!(report["fixers"], serde_json::json!([]));
+    assert_eq!(report["schema_version"], "cmdrvl.doctor.v1");
+    assert_eq!(report["mode"], "capabilities");
+    assert_eq!(report["healthy"], true);
+    assert_eq!(report["contract"]["schema_version"], "operator.v1");
+    assert_eq!(report["contract"]["name"], "lock");
 }
 
 #[test]
@@ -91,13 +77,10 @@ fn doctor_robot_triage_json_is_machine_readable() {
     let report: Value =
         serde_json::from_slice(&output.stdout).expect("robot triage should emit JSON");
 
-    assert_eq!(report["schema_version"], "lock.doctor.triage.v1");
-    assert_eq!(report["ok"], true);
-    assert_eq!(report["health"]["schema_version"], "lock.doctor.health.v1");
-    assert_eq!(
-        report["capabilities"]["schema_version"],
-        "lock.doctor.capabilities.v1"
-    );
+    assert_eq!(report["schema_version"], "cmdrvl.doctor.v1");
+    assert_eq!(report["mode"], "triage");
+    assert_eq!(report["healthy"], true);
+    assert!(report["next_actions"].is_array());
 }
 
 #[test]
@@ -118,12 +101,10 @@ fn top_level_robot_triage_json_is_machine_readable() {
     let report: Value =
         serde_json::from_slice(&output.stdout).expect("robot triage should emit JSON");
 
-    assert_eq!(report["schema_version"], "lock.doctor.triage.v1");
-    assert_eq!(report["ok"], true);
-    assert_eq!(
-        report["capabilities"]["agent_surfaces"]["robot_triage"]["command"],
-        "lock --robot-triage"
-    );
+    assert_eq!(report["schema_version"], "cmdrvl.doctor.v1");
+    assert_eq!(report["mode"], "triage");
+    assert_eq!(report["healthy"], true);
+    assert!(report["next_actions"].is_array());
 }
 
 #[test]
@@ -140,28 +121,15 @@ fn top_level_capabilities_json_advertises_agent_surfaces() {
     let report: Value =
         serde_json::from_slice(&output.stdout).expect("capabilities should emit JSON");
 
-    assert_eq!(report["schema_version"], "lock.doctor.capabilities.v1");
-    assert_eq!(report["read_only"], true);
-    assert_eq!(
-        report["agent_surfaces"]["capabilities"]["command"],
-        "lock capabilities --json"
-    );
-    assert_eq!(
-        report["agent_surfaces"]["robot_docs"]["command"],
-        "lock robot-docs guide"
-    );
-    assert_eq!(report["composition"]["family"]["name"], "cmdrvl-spine");
-    assert_eq!(report["composition"]["position"], 4);
-    assert_eq!(report["composition"]["produces"][0], "lock.v0 JSON");
-    assert!(
-        report["composition"]["accepts"]
-            .as_array()
-            .is_some_and(|values| values.iter().any(|value| value == "fingerprint.v0 JSONL"))
-    );
-    assert_eq!(
-        report["side_effects"]["by_command"]["lock capabilities --json"]["writes_witness_ledger"],
-        false
-    );
+    assert_eq!(report["schema_version"], "operator.v1");
+    assert_eq!(report["name"], "lock");
+    assert!(report["commands"].is_array());
+
+    let described_output = isolated_command(home.path(), &witness_path)
+        .arg("--describe")
+        .output()
+        .expect("lock describe should run");
+    assert_eq!(report, parse_stdout_json(&described_output));
 }
 
 #[test]
@@ -183,6 +151,22 @@ fn top_level_robot_docs_guide_names_agent_surface() {
     assert!(stdout.contains("vacuum --json <ROOT>... | hashbytes | fingerprint --fp <ID>"));
     assert!(stdout.contains("pack seal dataset.lock.json --output evidence/<DATASET>/"));
     assert!(stdout.contains("lock doctor --fix` is unavailable"));
+}
+
+#[test]
+fn help_is_ansi_free_with_no_color_and_non_tty_environment() {
+    let home = TempDir::new().expect("temp home should be created");
+    let witness_path = home.path().join("witness.jsonl");
+    let output = isolated_command(home.path(), &witness_path)
+        .env("NO_COLOR", "1")
+        .env("TERM", "dumb")
+        .arg("--help")
+        .output()
+        .expect("lock help should run");
+
+    assert_eq!(output.status.code(), Some(0));
+    assert!(!output.stdout.contains(&0x1b));
+    assert!(!output.stderr.contains(&0x1b));
 }
 
 #[test]

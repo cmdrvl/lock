@@ -88,6 +88,33 @@ fn explicit_created_timestamp_makes_identical_lockfiles_reproducible() {
 }
 
 #[test]
+fn json_is_a_noop_for_lock_creation_and_source_date_epoch_is_reproducible() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = write_manifest(
+        &dir,
+        "source-date-epoch.jsonl",
+        r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaaaaaa","size":10}
+"#,
+    );
+    let mut command = support::lock_command("source-date-epoch");
+    command
+        .args([input.to_str().unwrap(), "--json", "--no-witness"])
+        .env("SOURCE_DATE_EPOCH", "42")
+        .env_remove("EPISTEMIC_WITNESS");
+    let output = command.output().expect("lock should accept --json");
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {} stdout: {}",
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["created"], "1970-01-01T00:00:42Z");
+}
+
+#[test]
 fn smoke_main_lock_partial_exit_1_and_json_contract() {
     let dir = tempfile::tempdir().unwrap();
     let input = write_manifest(

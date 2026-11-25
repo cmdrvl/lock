@@ -78,6 +78,7 @@ pub fn run_lock(cli: &cli::Cli) -> u8 {
         let params = serde_json::json!({
             "dataset_id": cli.dataset_id,
             "as_of": cli.as_of,
+            "created": cli.created,
             "note": cli.note,
         });
 
@@ -181,16 +182,26 @@ fn refusal_output(envelope: refusal::RefusalEnvelope) -> OrchestrationOutput {
 }
 
 fn resolve_created_timestamp(value: Option<&str>) -> Result<String, String> {
-    match value {
-        Some(value) => DateTime::parse_from_rfc3339(value)
+    if let Some(value) = value {
+        return DateTime::parse_from_rfc3339(value)
             .map(|timestamp| {
                 timestamp
                     .with_timezone(&Utc)
                     .to_rfc3339_opts(SecondsFormat::Secs, true)
             })
-            .map_err(|error| format!("invalid --created timestamp: expected RFC3339: {error}")),
-        None => Ok(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+            .map_err(|error| format!("invalid --created timestamp: expected RFC3339: {error}"));
     }
+
+    if let Ok(value) = std::env::var("SOURCE_DATE_EPOCH") {
+        let seconds = value.parse::<i64>().map_err(|error| {
+            format!("invalid SOURCE_DATE_EPOCH: expected Unix seconds: {error}")
+        })?;
+        let timestamp = DateTime::<Utc>::from_timestamp(seconds, 0)
+            .ok_or_else(|| "invalid SOURCE_DATE_EPOCH: timestamp is out of range".to_string())?;
+        return Ok(timestamp.to_rfc3339_opts(SecondsFormat::Secs, true));
+    }
+
+    Ok(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true))
 }
 
 #[cfg(test)]
@@ -210,6 +221,7 @@ mod tests {
             dataset_id: Some("dataset-a".to_owned()),
             as_of: Some("2026-02-24T00:00:00Z".to_owned()),
             created: Some("2026-02-24T00:00:00Z".to_owned()),
+            json: false,
             note: Some("note".to_owned()),
             output: None,
             no_witness: false,
