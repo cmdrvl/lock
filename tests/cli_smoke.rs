@@ -59,6 +59,35 @@ fn smoke_main_lock_created_exit_0_and_json_contract() {
 }
 
 #[test]
+fn explicit_created_timestamp_makes_identical_lockfiles_reproducible() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = write_manifest(
+        &dir,
+        "reproducible.jsonl",
+        r#"{"version":"hash.v0","relative_path":"a.csv","bytes_hash":"sha256:aaaaaaaa","size":10}
+"#,
+    );
+    let args = [
+        input.to_str().unwrap(),
+        "--created",
+        "2026-01-15T05:30:00-05:00",
+        "--no-witness",
+    ];
+
+    let first = run_lock(&args, None);
+    let second = run_lock(&args, None);
+
+    assert_eq!(first.status.code(), Some(0));
+    assert_eq!(second.status.code(), Some(0));
+    assert_eq!(
+        first.stdout, second.stdout,
+        "fixed --created must fix lock_hash"
+    );
+    let parsed: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(parsed["created"], "2026-01-15T10:30:00Z");
+}
+
+#[test]
 fn smoke_main_lock_partial_exit_1_and_json_contract() {
     let dir = tempfile::tempdir().unwrap();
     let input = write_manifest(

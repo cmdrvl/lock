@@ -26,6 +26,10 @@ pub struct Cli {
     #[arg(long)]
     pub as_of: Option<String>,
 
+    /// Reproducible lock creation timestamp (RFC3339, normalized to UTC)
+    #[arg(long, value_name = "RFC3339")]
+    pub created: Option<String>,
+
     /// Free-text annotation
     #[arg(long)]
     pub note: Option<String>,
@@ -292,6 +296,7 @@ mod tests {
         assert!(cli.input.is_none());
         assert!(cli.dataset_id.is_none());
         assert!(cli.as_of.is_none());
+        assert!(cli.created.is_none());
         assert!(cli.note.is_none());
         assert!(!cli.no_witness);
         assert!(!cli.describe);
@@ -313,6 +318,8 @@ mod tests {
             "raw-dec",
             "--as-of",
             "2025-12-31T23:59:59Z",
+            "--created",
+            "2025-12-31T12:00:00-05:00",
             "--note",
             "Final delivery",
             "input.jsonl",
@@ -320,6 +327,7 @@ mod tests {
         .unwrap();
         assert_eq!(cli.dataset_id.as_deref(), Some("raw-dec"));
         assert_eq!(cli.as_of.as_deref(), Some("2025-12-31T23:59:59Z"));
+        assert_eq!(cli.created.as_deref(), Some("2025-12-31T12:00:00-05:00"));
         assert_eq!(cli.note.as_deref(), Some("Final delivery"));
         assert_eq!(cli.input, Some(PathBuf::from("input.jsonl")));
     }

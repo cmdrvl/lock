@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 
 pub mod cli;
 pub mod doctor;
@@ -142,13 +142,18 @@ fn orchestrate_from_read_result(
         cli.note.as_deref(),
     );
 
+    let created = match resolve_created_timestamp(cli.created.as_deref()) {
+        Ok(created) => created,
+        Err(message) => return refusal_output(refusal::bad_input_parse(0, &message)),
+    };
+
     let mut lockfile = lockfile::Lockfile {
         version: refusal::LOCK_VERSION.to_owned(),
         lock_hash: String::new(),
         dataset_id: metadata.dataset_id,
         as_of: metadata.as_of,
         note: metadata.note,
-        created: current_created_timestamp(),
+        created,
         tool_versions: metadata.tool_versions,
         profiles: metadata.profiles,
         skipped: classification.skipped,
@@ -175,8 +180,17 @@ fn refusal_output(envelope: refusal::RefusalEnvelope) -> OrchestrationOutput {
     }
 }
 
-fn current_created_timestamp() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+fn resolve_created_timestamp(value: Option<&str>) -> Result<String, String> {
+    match value {
+        Some(value) => DateTime::parse_from_rfc3339(value)
+            .map(|timestamp| {
+                timestamp
+                    .with_timezone(&Utc)
+                    .to_rfc3339_opts(SecondsFormat::Secs, true)
+            })
+            .map_err(|error| format!("invalid --created timestamp: expected RFC3339: {error}")),
+        None => Ok(Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)),
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +209,7 @@ mod tests {
             input: None,
             dataset_id: Some("dataset-a".to_owned()),
             as_of: Some("2026-02-24T00:00:00Z".to_owned()),
+            created: Some("2026-02-24T00:00:00Z".to_owned()),
             note: Some("note".to_owned()),
             output: None,
             no_witness: false,
