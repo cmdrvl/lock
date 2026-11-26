@@ -519,8 +519,11 @@ If the self-hash fails, member verification is skipped — the lockfile data is 
 | Code | Meaning |
 |------|---------|
 | `0` | `VERIFY_OK` — self-hash valid, members verified (or no `--root`) |
-| `1` | `VERIFY_FAILED` — tampered or members drifted; or `VERIFY_PARTIAL` — some members unreadable |
-| `2` | `REFUSAL` — lockfile unreadable, malformed, or root not found |
+| `1` | `VERIFY_FAILED` — self-hash invalid or members drifted/missing |
+| `2` | `REFUSAL` — lockfile/member input unreadable or structurally unsafe, malformed, or root not found |
+
+With `--root`, unreadable members, directories, and any symlink component are refused before
+hashing; `--no-witness` keeps these refusal checks read-only.
 
 ### Output Examples
 
@@ -602,7 +605,7 @@ lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]
 |------|-------------|
 | `--root <DIR>` | Enable member verification against this directory |
 | `--json` | Structured JSON output (default is human-readable) |
-| `--strict` | Promote `VERIFY_PARTIAL` → `VERIFY_FAILED` |
+| `--strict` | Retain legacy partial results as `VERIFY_FAILED`; unsafe member inputs always refuse |
 | `--no-witness` | Suppress witness ledger recording |
 
 ### Pipeline Integration

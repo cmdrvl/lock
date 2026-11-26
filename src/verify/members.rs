@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -82,8 +82,32 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
 
         let full_path = root.join(member_path);
 
-        // Inspect the link itself before resolving it. A member must be a
-        // regular file, not a symlink that could point outside --root.
+        // Inspect every path component before resolving it. A member must be a
+        // regular file, and neither the member nor an intermediate directory
+        // may be a symlink that could redirect hashing outside --root.
+        match first_symlink_component(root, member_path) {
+            Ok(Some(_)) => {
+                failures.push(MemberFailure {
+                    path: member_path.to_string(),
+                    reason: "SYMLINK".to_string(),
+                    expected: Some(expected_hash.to_string()),
+                    actual: None,
+                    expected_size,
+                    actual_size: None,
+                });
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                skips.push(MemberSkip {
+                    path: member_path.to_string(),
+                    reason: "IO_ERROR".to_string(),
+                    detail: error,
+                });
+                continue;
+            }
+        }
+
         let metadata = match std::fs::symlink_metadata(&full_path) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -219,6 +243,29 @@ pub fn verify_members(lockfile_json: &Value, root: &Path) -> MembersResult {
         failures,
         skips,
     }
+}
+
+/// Find the first symlink in a relative member path without following it.
+///
+/// Missing components are left for the normal MISSING failure below. Other
+/// metadata errors are returned so the caller can refuse instead of skipping.
+fn first_symlink_component(root: &Path, member_path: &str) -> Result<Option<String>, String> {
+    let mut current = root.to_path_buf();
+    for component in Path::new(member_path).components() {
+        let Component::Normal(component) = component else {
+            continue;
+        };
+        current.push(component);
+        let metadata = match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
+        if metadata.is_symlink() {
+            return Ok(Some(current.display().to_string()));
+        }
+    }
+    Ok(None)
 }
 
 fn is_unsafe_member_path(path: &str) -> bool {

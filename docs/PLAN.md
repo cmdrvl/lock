@@ -949,7 +949,7 @@ lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]
 | `--root <DIR>` | path | — | Root directory for member verification. Without this, only self-hash is checked. |
 | `--json` | flag | `false` | Emit structured JSON output. Default is human-readable. |
 | `--no-witness` | flag | `false` | Suppress witness ledger recording for this run. |
-| `--strict` | flag | `false` | Promote `VERIFY_PARTIAL` to `VERIFY_FAILED` (exit 1). |
+| `--strict` | flag | `false` | Retain legacy partial results as `VERIFY_FAILED`; unsafe member inputs refuse (exit 2). |
 
 ---
 
@@ -959,10 +959,11 @@ lock verify <LOCKFILE> [--root <DIR>] [--json] [--no-witness] [--strict]
 |------|---------|-----------|
 | `0` | `VERIFY_OK` | Self-hash valid AND (no `--root`, or all members verified) |
 | `1` | `VERIFY_FAILED` | Self-hash invalid, or one or more members drifted/missing |
-| `1` | `VERIFY_PARTIAL` | All checked members pass, but some couldn't be read (I/O errors). Only without `--strict`. |
-| `2` | `REFUSAL` | Lockfile unreadable/malformed, root not found, unsupported version |
+| `1` | `VERIFY_PARTIAL` | Reserved for legacy member-I/O partial reports; current unreadable members refuse closed. |
+| `2` | `REFUSAL` | Lockfile/member input unreadable or structurally unsafe, malformed, root not found, unsupported version |
 
-Note: `VERIFY_PARTIAL` and `VERIFY_FAILED` share exit code `1`. The `outcome` field in JSON output distinguishes them. `--strict` collapses `VERIFY_PARTIAL` into `VERIFY_FAILED`.
+Note: `VERIFY_PARTIAL` and `VERIFY_FAILED` share exit code `1` for legacy result values. Current
+unsafe member inputs refuse with exit 2 before either result is emitted.
 
 ---
 
@@ -982,7 +983,9 @@ When self-hash fails, `members` in the output is `null` — member data is untru
 
 #### 3. VERIFY_PARTIAL (exit 1)
 
-All members that could be read passed verification, but one or more members could not be read due to I/O errors (permission denied, locked file, etc.). The lockfile is not proven wrong, but not fully proven right either. With `--strict`, this becomes `VERIFY_FAILED`.
+Legacy output shape is retained for compatibility, but current member verification refuses
+unreadable members, non-regular files, symlinks, and root escapes with exit 2 before emitting
+a partial result. `--strict` therefore has no effect on those unsafe inputs.
 
 #### 4. REFUSAL (exit 2)
 
@@ -1225,8 +1228,8 @@ When `--json` is not specified, `lock verify` emits concise human-readable outpu
 
 | Code | Trigger | Next step |
 |------|---------|-----------|
-| `E_IO` | Cannot read lockfile from disk | Check file path and permissions |
-| `E_BAD_LOCKFILE` | Malformed JSON, missing required fields (`lock_hash`, `members`, `version`), absolute member paths, `..` path traversal | Regenerate the lockfile |
+| `E_IO` | Cannot read lockfile or member input from disk | Check file path and permissions |
+| `E_BAD_LOCKFILE` | Malformed JSON, missing required fields (`lock_hash`, `members`, `version`), duplicate/CurDir/absolute/traversal member paths, or unsafe member type | Regenerate the lockfile and inspect the root |
 | `E_UNSUPPORTED_VERSION` | `version` field is not `lock.v0` | Use a compatible version of `lock` |
 | `E_ROOT_NOT_FOUND` | `--root` path does not exist or is not a directory | Check the root path |
 | `E_UNKNOWN_ALGORITHM` | Member `bytes_hash` has an unrecognized algorithm prefix (not `sha256` or `blake3`) | Regenerate the lockfile with a supported hash algorithm |
@@ -1313,7 +1316,7 @@ E_UNKNOWN_ALGORITHM:
     d. Determine outcome:
        - All verified → VERIFY_OK
        - Any failed → VERIFY_FAILED
-       - No failed but some skipped → VERIFY_PARTIAL (or VERIFY_FAILED if --strict)
+       - No failed but some legacy skipped → VERIFY_PARTIAL (or VERIFY_FAILED if --strict)
 10. If --root not provided: set members to null, outcome is VERIFY_OK (self-hash passed)
 11. Build output (VerifyResult)
 12. Emit output to stdout (JSON or human-readable)
@@ -1351,7 +1354,8 @@ If `lock_hash` is an empty string, `lock verify` computes the expected hash and 
 
 #### Symlinks
 
-Member paths that resolve to symlinks are followed. `lock verify` hashes the target file content. If the symlink is broken → `MISSING`.
+Member paths that resolve to symlinks are refused before hashing. Direct symlinks and
+directory-symlink escapes produce a typed `E_BAD_LOCKFILE` refusal; no target content is read.
 
 #### Large files
 
@@ -1551,7 +1555,7 @@ Lock is an artifact tool (always JSON, no `--json` flag). Verify is a report too
 | Delete a member file, verify | → exit 1, VERIFY_FAILED, MISSING |
 | Lockfile tampered (edit JSON), verify | → exit 1, VERIFY_FAILED, `lock_hash.valid: false`, `members: null` |
 | Root not found | `--root /nonexistent` → exit 2, E_ROOT_NOT_FOUND |
-| `--strict` with I/O error | → exit 1, VERIFY_FAILED (not VERIFY_PARTIAL) |
+| `--strict` with an unreadable member | → exit 2, REFUSAL E_IO (same as without `--strict`) |
 | `--json` vs default | JSON output parses as valid JSON; human output has ✓/✗/⚠ markers |
 
 #### Witness tests
