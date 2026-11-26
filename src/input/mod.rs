@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader, Cursor, Read};
 use std::path::Path;
 
+use cmdrvl_core::hash::{Algorithm, hash_bytes};
 use serde_json::Value;
 
 const MISSING_HASH_SAMPLE_LIMIT: usize = 5;
@@ -129,7 +130,7 @@ where
         })?;
 
     let source = SourceMetadata {
-        source_hash: format!("blake3:{}", blake3::hash(&bytes).to_hex()),
+        source_hash: hash_bytes(Algorithm::Blake3, &bytes),
         source_bytes: bytes.len() as u64,
     };
 

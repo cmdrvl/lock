@@ -1,3 +1,4 @@
+use cmdrvl_core::sorted_compact;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -69,12 +70,8 @@ pub struct RefusalEnvelope {
 impl RefusalEnvelope {
     /// Serialize to deterministic JSON (sorted keys at all levels, compact, no trailing newline).
     pub fn to_json(&self) -> String {
-        // Convert struct → Value (gives us a Map), then serialize.
-        // serde_json::Map preserves insertion order from struct field declaration,
-        // so we convert through Value to get sorted keys via to_value + to_string.
         let value = serde_json::to_value(self).expect("RefusalEnvelope is always serializable");
-        let sorted = sort_value(value);
-        serde_json::to_string(&sorted).expect("sorted Value is always serializable")
+        sorted_compact::to_string(&value)
     }
 }
 

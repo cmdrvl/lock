@@ -8,6 +8,7 @@ license = "MIT"
 blake3 = "1"
 chrono = { version = "0.4", features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
+cmdrvl-core = { git = "https://github.com/cmdrvl/core", rev = "a3dad0b1af2eeb8036625b25f3d9ff94c3a1ef0e", default-features = false }
 fs2 = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.145"

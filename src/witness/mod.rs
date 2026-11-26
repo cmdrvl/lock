@@ -5,6 +5,7 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
+use cmdrvl_core::hash::{Algorithm, hash_bytes};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -515,7 +516,7 @@ fn append_witness_record_to(
     file.lock_exclusive()?;
 
     // Compute output_hash (BLAKE3 of stdout bytes).
-    let output_hash = format!("blake3:{}", blake3::hash(output_bytes).to_hex());
+    let output_hash = hash_bytes(Algorithm::Blake3, output_bytes);
 
     let ts = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
 
@@ -535,7 +536,7 @@ fn append_witness_record_to(
 
     // Compute record id as BLAKE3 of the record with id="".
     let pre_id_json = serde_json::to_string(&record).map_err(io::Error::other)?;
-    let record_id = format!("blake3:{}", blake3::hash(pre_id_json.as_bytes()).to_hex());
+    let record_id = hash_bytes(Algorithm::Blake3, pre_id_json.as_bytes());
     record["id"] = Value::String(record_id);
 
     // Serialize final record (compact, single line).

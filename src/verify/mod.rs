@@ -4,6 +4,7 @@ pub mod output;
 use std::fs;
 use std::path::Path;
 
+use cmdrvl_core::sorted_compact;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -72,8 +73,7 @@ fn verify_refusal_json(code: VerifyRefusalCode, message: String, detail: Value) 
             "next_command": null,
         }
     });
-    let sorted = sort_value(value);
-    serde_json::to_string(&sorted).expect("sorted Value is always serializable")
+    sorted_compact::to_string(&value)
 }
 
 /// E_IO: cannot read lockfile.
@@ -503,8 +503,7 @@ pub fn run_verify(args: &VerifyArgs) -> u8 {
 
 fn emit_verify_json(result: &VerifyResult) -> String {
     let value = serde_json::to_value(result).expect("VerifyResult is always serializable");
-    let sorted = sort_value(value);
-    serde_json::to_string(&sorted).expect("sorted Value is always serializable")
+    sorted_compact::to_string(&value)
 }
 
 fn emit_witness(args: &VerifyArgs, exit_code: u8, outcome: &str, output_bytes: &[u8]) {
