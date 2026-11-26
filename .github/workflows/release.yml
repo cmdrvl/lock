@@ -26,8 +26,57 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A released version is immutable: if v<version> is tagged at another commit (or released), the
+  # release jobs are skipped. A re-run of the same commit still publishes.
+  guard:
+    name: Release guard
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.guard.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether this version is already released
+        id: guard
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="v$(python3 -c "import tomllib; print(tomllib.load(open('Cargo.toml','rb'))['package']['version'])")"
+          publish=true
+          released_at=""
+          if tag_sha="$(git rev-parse --verify --quiet "refs/tags/${version}^{commit}")"; then
+            # A tag at this commit is a re-run of the same release and may publish; anywhere else it is taken.
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              publish=false
+              released_at="tag ${version} at ${tag_sha}"
+            fi
+          elif release_error="$(gh release view "$version" --repo "$GITHUB_REPOSITORY" --json tagName 2>&1 >/dev/null)"; then
+            # A release without its tag in the checkout still means the version is published.
+            publish=false
+            released_at="an existing GitHub release ${version}"
+          else
+            case "$release_error" in
+              *"release not found"*) ;;
+              *)
+                echo "::error::release guard: could not check for release ${version}: ${release_error}"
+                exit 1
+                ;;
+            esac
+          fi
+          if [ "$publish" = false ]; then
+            echo "::notice::version ${version#v} is already released (${released_at}); bump the version to release again. Release jobs are skipped."
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "publish=${publish}" >> "$GITHUB_OUTPUT"
+
   preflight:
     name: Release preflight checks
+    needs: guard
+    if: needs.guard.outputs.publish == 'true'
     runs-on: ubuntu-latest
     outputs:
       release_version: ${{ steps.version.outputs.release_version }}
@@ -261,8 +310,13 @@ jobs:
           set -euo pipefail
           version="${{ needs.preflight.outputs.release_version }}"
           tag="${{ needs.preflight.outputs.release_tag }}"
-          if git rev-parse "${tag}" >/dev/null 2>&1; then
-            echo "Tag ${tag} already exists. Reusing existing tag."
+          if tag_sha="$(git rev-parse --verify --quiet "refs/tags/${tag}^{commit}")"; then
+            # Second check: never release a tag that names another commit.
+            if [ "${tag_sha}" != "${GITHUB_SHA}" ]; then
+              echo "::error::${tag} is tagged at ${tag_sha}, not ${GITHUB_SHA}; refusing to release over it. Bump the version."
+              exit 1
+            fi
+            echo "Tag ${tag} already points to this commit. Reusing it."
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
