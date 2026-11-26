@@ -210,7 +210,7 @@
           "name": "strict",
           "flag": "--strict",
           "type": "flag",
-          "description": "Retain legacy partial results as VERIFY_FAILED; unsafe member inputs always refuse"
+          "description": "Promote VERIFY_PARTIAL to VERIFY_FAILED"
         }
       ],
       "exit_codes": {
@@ -219,7 +219,7 @@
           "domain": "positive"
         },
         "1": {
-          "meaning": "VERIFY_FAILED",
+          "meaning": "VERIFY_FAILED or VERIFY_PARTIAL",
           "domain": "negative"
         },
         "2": {
@@ -230,12 +230,12 @@
       "refusals": [
         {
           "code": "E_IO",
-          "message": "Cannot read lockfile or member input",
+          "message": "Cannot read lockfile",
           "action": "check_path"
         },
         {
           "code": "E_BAD_LOCKFILE",
-          "message": "Malformed or structurally unsafe lockfile/member input",
+          "message": "Malformed JSON or missing required fields; duplicate or CurDir member paths",
           "action": "regenerate_lockfile"
         },
         {

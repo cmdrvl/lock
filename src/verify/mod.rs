@@ -76,25 +76,13 @@ fn verify_refusal_json(code: VerifyRefusalCode, message: String, detail: Value) 
     serde_json::to_string(&sorted).expect("sorted Value is always serializable")
 }
 
-/// E_IO: cannot read the lockfile or a member input.
+/// E_IO: cannot read lockfile.
 pub fn refusal_io(path: &Path, error: &str) -> String {
     verify_refusal_json(
         VerifyRefusalCode::Io,
         format!("cannot read lockfile — {error}"),
         serde_json::json!({
             "path": path.display().to_string(),
-            "error": error,
-        }),
-    )
-}
-
-/// E_IO: cannot read a member while verifying against `--root`.
-pub fn refusal_member_io(path: &str, error: &str) -> String {
-    verify_refusal_json(
-        VerifyRefusalCode::Io,
-        format!("cannot read member — {error}"),
-        serde_json::json!({
-            "path": path,
             "error": error,
         }),
     )
@@ -166,18 +154,6 @@ pub fn refusal_bad_lockfile_duplicate(member_index: usize, member_path: &str) ->
         serde_json::json!({
             "member_index": member_index,
             "member_path": member_path,
-        }),
-    )
-}
-
-/// E_BAD_LOCKFILE: member is not a safe regular file under `--root`.
-pub fn refusal_bad_member(path: &str, reason: &str) -> String {
-    verify_refusal_json(
-        VerifyRefusalCode::BadLockfile,
-        format!("member is not a safe regular file: {path} ({reason})"),
-        serde_json::json!({
-            "member_path": path,
-            "reason": reason,
         }),
     )
 }
@@ -490,23 +466,6 @@ pub fn run_verify(args: &VerifyArgs) -> u8 {
     } else if let Some(root) = &args.root {
         // Level 2: verify members against filesystem.
         let members_result = members::verify_members(&lockfile_value, root);
-        if let Some(skip) = members_result.skips.first() {
-            let payload = refusal_member_io(&skip.path, &skip.detail);
-            print!("{payload}");
-            emit_witness(args, 2, "REFUSAL", payload.as_bytes());
-            return 2;
-        }
-        if let Some(failure) = members_result.failures.iter().find(|failure| {
-            matches!(
-                failure.reason.as_str(),
-                "NON_REGULAR" | "PATH_ESCAPE" | "SYMLINK" | "UNSAFE_PATH"
-            )
-        }) {
-            let payload = refusal_bad_member(&failure.path, &failure.reason);
-            print!("{payload}");
-            emit_witness(args, 2, "REFUSAL", payload.as_bytes());
-            return 2;
-        }
         let (outcome, exit_code) = members::members_outcome(&members_result, args.strict);
         let members_json =
             serde_json::to_value(&members_result).expect("MembersResult is serializable");
@@ -662,24 +621,6 @@ mod tests {
             parsed["refusal"]["detail"]["member_path"],
             "data/../../../etc/passwd"
         );
-    }
-
-    #[test]
-    fn refusal_bad_member_envelope() {
-        let json = refusal_bad_member("outside-link", "SYMLINK");
-        let parsed = parse_refusal(&json);
-        assert_eq!(parsed["refusal"]["code"], "E_BAD_LOCKFILE");
-        assert_eq!(parsed["refusal"]["detail"]["member_path"], "outside-link");
-        assert_eq!(parsed["refusal"]["detail"]["reason"], "SYMLINK");
-    }
-
-    #[test]
-    fn refusal_member_io_envelope() {
-        let json = refusal_member_io("locked.csv", "permission denied");
-        let parsed = parse_refusal(&json);
-        assert_eq!(parsed["refusal"]["code"], "E_IO");
-        assert_eq!(parsed["refusal"]["detail"]["path"], "locked.csv");
-        assert_eq!(parsed["refusal"]["detail"]["error"], "permission denied");
     }
 
     #[test]

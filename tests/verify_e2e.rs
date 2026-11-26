@@ -305,7 +305,7 @@ fn verify_missing_lockfile_exits_2() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn verify_unreadable_member_is_typed_refusal_even_without_strict() {
+fn verify_strict_promotes_partial_to_failed() {
     let (_dir, manifest_path, data_root) = create_fixture(&[("a.csv", b"data")]);
     let (lockfile_path, _) = create_lockfile(&manifest_path, _dir.path());
 
@@ -322,28 +322,42 @@ fn verify_unreadable_member_is_typed_refusal_even_without_strict() {
     // Only run the strict assertion on unix where we can control permissions.
     #[cfg(unix)]
     {
-        // A member that cannot be read is an unsafe verification input, not a
-        // partial verdict: both strict modes refuse before any member result is
-        // emitted. This closes the old skip-to-exit-1 behavior.
-        for strict in [false, true] {
-            let mut args = vec![
+        // Without --strict: should be VERIFY_PARTIAL or VERIFY_FAILED depending on
+        // whether the size check can stat the file (it can — metadata doesn't need read).
+        // Actually, metadata works without read permission on unix, and the file exists,
+        // so size check passes. The stream_hash open() will fail → IO_ERROR → skip.
+        let output = run_lock(
+            &[
                 "verify",
                 lockfile_path.to_str().unwrap(),
                 "--root",
                 data_root.to_str().unwrap(),
                 "--json",
                 "--no-witness",
-            ];
-            if strict {
-                args.push("--strict");
-            }
-            let output = run_lock(&args, None);
-            assert_eq!(output.status.code(), Some(2));
-            let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(parsed["outcome"], "REFUSAL");
-            assert_eq!(parsed["refusal"]["code"], "E_IO");
-            assert_eq!(parsed["refusal"]["detail"]["path"], "a.csv");
-        }
+            ],
+            None,
+        );
+        assert_eq!(output.status.code(), Some(1));
+        let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(parsed["outcome"], "VERIFY_PARTIAL");
+        assert_eq!(parsed["members"]["skipped"], 1);
+
+        // With --strict: VERIFY_PARTIAL becomes VERIFY_FAILED.
+        let output = run_lock(
+            &[
+                "verify",
+                lockfile_path.to_str().unwrap(),
+                "--root",
+                data_root.to_str().unwrap(),
+                "--json",
+                "--no-witness",
+                "--strict",
+            ],
+            None,
+        );
+        assert_eq!(output.status.code(), Some(1));
+        let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(parsed["outcome"], "VERIFY_FAILED");
 
         // Restore permissions for cleanup.
         use std::os::unix::fs::PermissionsExt;

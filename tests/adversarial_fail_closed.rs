@@ -121,6 +121,22 @@ fn assert_refusal(output: Output, expected_code: &str) -> Value {
     envelope
 }
 
+fn assert_result(output: Output, expected_exit: i32, expected_outcome: &str) -> Value {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(expected_exit),
+        "stdout={stdout}\nstderr={stderr}"
+    );
+    assert!(stderr.trim().is_empty(), "unexpected stderr: {stderr}");
+    let parsed: Result<Value, _> = serde_json::from_slice(&output.stdout);
+    assert!(parsed.is_ok(), "result stdout is not JSON: {stdout}");
+    let parsed = parsed.unwrap_or(Value::Null);
+    assert_eq!(parsed["outcome"], expected_outcome);
+    parsed
+}
+
 fn rewrite_lock(lock_path: &Path, lockfile: &Value, change: impl FnOnce(&mut Value)) {
     let mut changed = lockfile.clone();
     change(&mut changed);
@@ -130,7 +146,7 @@ fn rewrite_lock(lock_path: &Path, lockfile: &Value, change: impl FnOnce(&mut Val
 }
 
 #[test]
-fn verify_adversarial_matrix_is_bounded_and_fail_closed() {
+fn verify_adversarial_matrix_is_bounded_and_matches_release() {
     let (tmp, root, lock_path, lockfile) = create_fixture();
 
     #[cfg(unix)]
@@ -139,17 +155,33 @@ fn verify_adversarial_matrix_is_bounded_and_fail_closed() {
 
         let member = root.join("member.csv");
         fs::set_permissions(&member, fs::Permissions::from_mode(0o000)).unwrap();
-        let output = run_bounded(verify_args(&lock_path, Some(&root)));
-        let refusal = assert_refusal(output, "E_IO");
-        assert_eq!(refusal["refusal"]["detail"]["path"], "member.csv");
+        let partial = assert_result(
+            run_bounded(verify_args(&lock_path, Some(&root))),
+            1,
+            "VERIFY_PARTIAL",
+        );
+        assert_eq!(partial["members"]["skipped"], 1);
+        let mut strict_args = verify_args(&lock_path, Some(&root));
+        strict_args.push("--strict".to_owned());
+        let strict = assert_result(run_bounded(strict_args), 1, "VERIFY_FAILED");
+        assert_eq!(strict["members"]["skipped"], 1);
         fs::set_permissions(&member, fs::Permissions::from_mode(0o644)).unwrap();
     }
 
     fs::remove_file(root.join("member.csv")).unwrap();
     fs::create_dir(root.join("member.csv")).unwrap();
-    let output = run_bounded(verify_args(&lock_path, Some(&root)));
-    let refusal = assert_refusal(output, "E_BAD_LOCKFILE");
-    assert_eq!(refusal["refusal"]["detail"]["reason"], "NON_REGULAR");
+    let report = assert_result(
+        run_bounded(verify_args(&lock_path, Some(&root))),
+        1,
+        "VERIFY_FAILED",
+    );
+    assert_eq!(report["members"]["failures"][0]["reason"], "NON_REGULAR");
+    let mut strict_args = verify_args(&lock_path, Some(&root));
+    strict_args.push("--strict".to_owned());
+    assert_eq!(
+        assert_result(run_bounded(strict_args), 1, "VERIFY_FAILED"),
+        report
+    );
     fs::remove_dir(root.join("member.csv")).unwrap();
 
     #[cfg(unix)]
@@ -164,29 +196,56 @@ fn verify_adversarial_matrix_is_bounded_and_fail_closed() {
         rewrite_lock(&lock_path, &lockfile, |value| {
             value["members"][0]["path"] = json!("direct-link");
         });
-        let output = run_bounded(verify_args(&lock_path, Some(&root)));
-        let refusal = assert_refusal(output, "E_BAD_LOCKFILE");
-        assert_eq!(refusal["refusal"]["detail"]["reason"], "SYMLINK");
+        let report = assert_result(
+            run_bounded(verify_args(&lock_path, Some(&root))),
+            1,
+            "VERIFY_FAILED",
+        );
+        assert_eq!(report["members"]["failures"][0]["reason"], "SYMLINK");
+        let mut strict_args = verify_args(&lock_path, Some(&root));
+        strict_args.push("--strict".to_owned());
+        assert_eq!(
+            assert_result(run_bounded(strict_args), 1, "VERIFY_FAILED"),
+            report
+        );
         fs::remove_file(root.join("direct-link")).unwrap();
 
         symlink(&outside, root.join("parent-link")).unwrap();
         rewrite_lock(&lock_path, &lockfile, |value| {
             value["members"][0]["path"] = json!("parent-link/secret.txt");
         });
-        let output = run_bounded(verify_args(&lock_path, Some(&root)));
-        let refusal = assert_refusal(output, "E_BAD_LOCKFILE");
-        assert_eq!(refusal["refusal"]["detail"]["reason"], "SYMLINK");
+        let report = assert_result(
+            run_bounded(verify_args(&lock_path, Some(&root))),
+            1,
+            "VERIFY_FAILED",
+        );
+        assert_eq!(report["members"]["failures"][0]["reason"], "PATH_ESCAPE");
+        let mut strict_args = verify_args(&lock_path, Some(&root));
+        strict_args.push("--strict".to_owned());
+        assert_eq!(
+            assert_result(run_bounded(strict_args), 1, "VERIFY_FAILED"),
+            report
+        );
         fs::remove_file(root.join("parent-link")).unwrap();
 
         fs::create_dir(root.join("inside")).unwrap();
-        fs::write(root.join("inside/secret.txt"), b"inside secret").unwrap();
+        fs::write(root.join("inside/secret.txt"), b"stable member content").unwrap();
         symlink(root.join("inside"), root.join("inside-link")).unwrap();
         rewrite_lock(&lock_path, &lockfile, |value| {
             value["members"][0]["path"] = json!("inside-link/secret.txt");
         });
-        let output = run_bounded(verify_args(&lock_path, Some(&root)));
-        let refusal = assert_refusal(output, "E_BAD_LOCKFILE");
-        assert_eq!(refusal["refusal"]["detail"]["reason"], "SYMLINK");
+        let report = assert_result(
+            run_bounded(verify_args(&lock_path, Some(&root))),
+            0,
+            "VERIFY_OK",
+        );
+        assert_eq!(report["members"]["verified"], 1);
+        let mut strict_args = verify_args(&lock_path, Some(&root));
+        strict_args.push("--strict".to_owned());
+        assert_eq!(
+            assert_result(run_bounded(strict_args), 0, "VERIFY_OK"),
+            report
+        );
         fs::remove_file(root.join("inside-link")).unwrap();
     }
 
@@ -203,18 +262,26 @@ fn verify_adversarial_matrix_is_bounded_and_fail_closed() {
     rewrite_lock(&lock_path, &lockfile, |value| {
         value["members"][0]["path"] = json!("./member.csv");
     });
-    assert_refusal(
+    let curdir_refusal = assert_refusal(
         run_bounded(verify_args(&lock_path, Some(&root))),
         "E_BAD_LOCKFILE",
+    );
+    assert_eq!(
+        curdir_refusal["refusal"]["detail"]["member_path"],
+        "./member.csv"
     );
 
     rewrite_lock(&lock_path, &lockfile, |value| {
         let duplicate = value["members"][0].clone();
         value["members"] = json!([duplicate.clone(), duplicate]);
     });
-    assert_refusal(
+    let duplicate_refusal = assert_refusal(
         run_bounded(verify_args(&lock_path, Some(&root))),
         "E_BAD_LOCKFILE",
+    );
+    assert_eq!(
+        duplicate_refusal["refusal"]["detail"]["member_path"],
+        "member.csv"
     );
 
     rewrite_lock(&lock_path, &lockfile, |value| {
