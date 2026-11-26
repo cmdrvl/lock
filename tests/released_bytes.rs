@@ -21,6 +21,11 @@ const FLOATS_LOCK: &str = include_str!("fixtures/released-0.7.0/floats.lock.json
 const FLOATS_COMPUTED: &str =
     "sha256:d432b39aa3a7c4baace0c729a33b911d1a3d3f6f60f21eb802f1f0aa2709104e";
 
+const PARSER_FLOATS_LOCK: &str = r#"{"version":"lock.v0","lock_hash":"sha256:feed","members":[],"x":[9.335744933994957e-17,5.084767197776064e190,2.6104882325689648e-130]}"#;
+/// `lock_hash.computed` printed by released `lock verify` for [`PARSER_FLOATS_LOCK`].
+const PARSER_FLOATS_COMPUTED: &str =
+    "sha256:303ce1df8e3a5a08da4dc255f610ae5b78dcb8de70bd845c45d64469a3011d0f";
+
 const RELEASED_MISSING_HASH: &str = r#"{"outcome":"REFUSAL","refusal":{"code":"E_MISSING_HASH","detail":{"count":1,"sample_paths":["a.csv"]},"message":"1 record lacks bytes_hash — run hashbytes first","next_command":"vacuum <path> | hashbytes | lock --dataset-id \"<dataset>\" > dataset.lock.json"},"version":"lock.v0"}"#;
 
 const RELEASED_VERIFY_IO: &str = r#"{"outcome":"REFUSAL","refusal":{"code":"E_IO","detail":{"error":"No such file or directory (os error 2)","path":"nope.lock.json"},"message":"cannot read lockfile — No such file or directory (os error 2)","next_command":null},"version":"lock-verify.v0"}"#;
@@ -85,6 +90,15 @@ fn released_lock_hash_over_floats_and_hostile_keys_is_reproduced() {
     assert_eq!(detail.computed, FLOATS_COMPUTED);
     assert_eq!(detail.stored, "sha256:feed");
     assert!(!detail.valid);
+}
+
+/// serde_json's default float parser reads these strings one ULP away from the correctly rounded
+/// value, and released lock hashes what that parser reads. Enabling `float_roundtrip` (which
+/// cmdrvl-core's default features do) changes this `lock_hash`.
+#[test]
+fn released_float_parsing_is_unchanged() {
+    let detail = verify_lock_hash_detail(PARSER_FLOATS_LOCK).expect("parse");
+    assert_eq!(detail.computed, PARSER_FLOATS_COMPUTED);
 }
 
 #[test]
