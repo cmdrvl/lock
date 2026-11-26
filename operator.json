@@ -1,7 +1,7 @@
 {
   "schema_version": "operator.v1",
   "name": "lock",
-  "tool_version": "0.7.0",
+  "tool_version": "0.7.1",
   "contract_version": "1.0.0",
   "description": "Dataset lockfile tool: pins artifacts, fingerprints, and tool versions into a self-hashed immutable JSON artifact",
   "repository": "https://github.com/cmdrvl/lock",
