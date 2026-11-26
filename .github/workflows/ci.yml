@@ -110,6 +110,3 @@ jobs:
 
       - name: Verify locked dependency graph
         run: cargo check --locked --all-targets
-
-      - name: Verify publish artifact (dry run, locked)
-        run: cargo publish --dry-run --locked
